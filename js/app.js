@@ -549,14 +549,23 @@ const App = {
                     logoAdjustments.style.display = 'block';
                     canvasHint.style.display = 'none';
 
-                    // Enable Move Logo button now that logo is loaded
+                    // Enable Move Logo button and switch to logo mode
                     const moveLogoBtn = document.getElementById('moveLogoBtn');
                     if (moveLogoBtn) moveLogoBtn.disabled = false;
 
-                    // Set draggable only if in logo mode
-                    if (this.state.interactionMode === 'logo') {
-                        logoCanvas.classList.add('draggable');
-                    }
+                    this.state.interactionMode = 'logo';
+                    logoCanvas.classList.add('draggable');
+                    logoCanvas.classList.remove('paint-mode');
+
+                    // Update toggle buttons
+                    document.querySelectorAll('#paintModeControls .mode-btn').forEach(b => b.classList.remove('active'));
+                    if (moveLogoBtn) moveLogoBtn.classList.add('active');
+
+                    // Hide brush controls, update hint
+                    const brushControls = document.getElementById('brushControls');
+                    if (brushControls) brushControls.style.display = 'none';
+                    const modeHint = document.getElementById('modeHint');
+                    if (modeHint) modeHint.textContent = 'Drag to move logo';
 
                     // Show optimize section and flag logo loaded for style tab
                     const optimizeMaskSection = document.getElementById('optimizeMaskSection');
