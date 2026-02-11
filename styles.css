@@ -835,10 +835,20 @@ body {
     box-shadow: var(--shadow);
 }
 
+.delete-side-panel .control-group {
+    margin-bottom: 12px;
+    padding-bottom: 0;
+    border-bottom: none;
+}
+
+.delete-side-panel .control-group:last-child {
+    margin-bottom: 0;
+}
+
 .delete-summary {
     margin-bottom: 16px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid var(--border);
+    padding-bottom: 0;
+    border-bottom: none;
 }
 
 .delete-summary-row {
