@@ -586,8 +586,8 @@ const QRRenderer = {
         // Ensure quiet zone stays white even if logo scales beyond content
         this.drawQuietZoneOverlay(ctx, canvasSize, moduleSize, quietZone);
 
-        // Draw modules on top with slight transparency so logo shows through
-        ctx.globalAlpha = 0.75;
+        // Draw modules on top with transparency so logo shows through
+        ctx.globalAlpha = 0.35;
         const sizeFraction = 0.85; // Use larger modules for visibility
 
         // Draw all modules as simple black/white
