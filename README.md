@@ -19,7 +19,7 @@ Text, URL, Contact (vCard), Phone, SMS, Email, WiFi, Calendar Event, and Locatio
 - Paint individual padding modules black or white
 - Shift+drag to fill rectangular areas
 - Grid overlay distinguishes editable (padding) cells from locked (data) cells
-- Match Padding to Logo will try to automatically match the black/white to the Logo
+- Can automatically match the black/white squares to the Logo
 
 ### Styling
 - **Module shapes**: Square, circle, rounded, diamond, cushion
