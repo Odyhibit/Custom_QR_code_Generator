@@ -1,1 +1,0 @@
-Custom QR code Generator
