@@ -1007,6 +1007,7 @@ const App = {
         const moduleSize = canvasSize / totalSize;
         const offset = quietZone * moduleSize;
         const qrAreaSize = size * moduleSize;
+        const sampleSize = moduleSize * 0.5;
 
         let matches = 0;
         let total = 0;
@@ -1017,7 +1018,7 @@ const App = {
                 const moduleCenterX = (col * moduleSize) + moduleSize / 2;
                 const moduleCenterY = (row * moduleSize) + moduleSize / 2;
 
-                const sampledRgba = QRRenderer.sampleLogo(moduleCenterX, moduleCenterY, qrAreaSize);
+                const sampledRgba = QRRenderer.sampleLogoDominant(moduleCenterX, moduleCenterY, qrAreaSize, sampleSize);
 
                 // Skip if outside logo or transparent
                 if (!sampledRgba || sampledRgba[3] < 128) continue;
@@ -1256,13 +1257,14 @@ const App = {
     getDesiredPaddingEdits(moduleSize, canvasSize, matrixSize, maskPattern) {
         const edits = new Map();
         const editableCells = this.state.editableCells;
+        const sampleSize = moduleSize * 0.5;
 
         editableCells.forEach(cellKey => {
             const [row, col] = cellKey.split(',').map(Number);
             const canvasX = (col + 0.5) * moduleSize;
             const canvasY = (row + 0.5) * moduleSize;
 
-            const sampledRgba = QRRenderer.sampleLogo(canvasX, canvasY, canvasSize);
+            const sampledRgba = QRRenderer.sampleLogoDominant(canvasX, canvasY, canvasSize, sampleSize);
 
             if (!sampledRgba || sampledRgba[3] < 128) {
                 // Outside logo or transparent - keep current masked value
@@ -1283,6 +1285,7 @@ const App = {
     simulateMaskWithLogoBlend(maskPattern, desiredColors, moduleSize, canvasSize) {
         const version = this.state.version;
         const size = 21 + (version - 1) * 4;
+        const sampleSize = moduleSize * 0.5;
 
         // Save original dataBytes (includes any baked-in paint edits)
         const originalDataBytes = [...this.state.bitstreamData.dataBytes];
@@ -1307,7 +1310,7 @@ const App = {
             const canvasX = (col + 0.5) * moduleSize;
             const canvasY = (row + 0.5) * moduleSize;
 
-            const sampledRgba = QRRenderer.sampleLogo(canvasX, canvasY, canvasSize);
+            const sampledRgba = QRRenderer.sampleLogoDominant(canvasX, canvasY, canvasSize, sampleSize);
 
             let moduleValue;
             if (!sampledRgba || sampledRgba[3] < 128) {
@@ -1367,13 +1370,14 @@ const App = {
     // Get desired colors for ALL modules based on logo (not just padding)
     getDesiredLogoColors(moduleSize, canvasSize, matrixSize) {
         const desiredValues = new Map();
+        const sampleSize = moduleSize * 0.5;
 
         for (let row = 0; row < matrixSize; row++) {
             for (let col = 0; col < matrixSize; col++) {
                 const canvasX = (col + 0.5) * moduleSize;
                 const canvasY = (row + 0.5) * moduleSize;
 
-                const sampledRgba = QRRenderer.sampleLogo(canvasX, canvasY, canvasSize);
+                const sampledRgba = QRRenderer.sampleLogoDominant(canvasX, canvasY, canvasSize, sampleSize);
 
                 if (!sampledRgba) continue;
 

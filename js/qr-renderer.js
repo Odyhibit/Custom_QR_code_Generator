@@ -183,9 +183,92 @@ const QRRenderer = {
     },
 
     /**
+     * Sample the dominant logo color around a position
+     */
+    sampleLogoDominant(canvasX, canvasY, qrAreaSize, sampleSize) {
+        if (!this.state.logoImg || !this.state.logoImageData) {
+            return null;
+        }
+
+        const bounds = this.getLogoBounds(qrAreaSize);
+        if (!bounds) return null;
+
+        const logoLocalX = canvasX - bounds.x;
+        const logoLocalY = canvasY - bounds.y;
+
+        if (logoLocalX < 0 || logoLocalX >= bounds.width || logoLocalY < 0 || logoLocalY >= bounds.height) {
+            return null;
+        }
+
+        const centerX = (logoLocalX / bounds.width) * this.state.logoImg.width;
+        const centerY = (logoLocalY / bounds.height) * this.state.logoImg.height;
+
+        const sampleWidth = Math.max(1, Math.round((sampleSize / bounds.width) * this.state.logoImg.width));
+        const sampleHeight = Math.max(1, Math.round((sampleSize / bounds.height) * this.state.logoImg.height));
+        const halfW = sampleWidth / 2;
+        const halfH = sampleHeight / 2;
+
+        const minX = Math.max(0, Math.floor(centerX - halfW));
+        const maxX = Math.min(this.state.logoImg.width - 1, Math.floor(centerX + halfW));
+        const minY = Math.max(0, Math.floor(centerY - halfH));
+        const maxY = Math.min(this.state.logoImg.height - 1, Math.floor(centerY + halfH));
+
+        const regionWidth = maxX - minX + 1;
+        const regionHeight = maxY - minY + 1;
+        const targetSamples = 36;
+        const stepX = Math.max(1, Math.floor(regionWidth / Math.sqrt(targetSamples)));
+        const stepY = Math.max(1, Math.floor(regionHeight / Math.sqrt(targetSamples)));
+
+        const buckets = new Map();
+        const quantize = (val) => Math.min(255, Math.round(val / 4) * 4);
+
+        for (let y = minY; y <= maxY; y += stepY) {
+            for (let x = minX; x <= maxX; x += stepX) {
+                const idx = (y * this.state.logoImg.width + x) * 4;
+                const a = this.state.logoImageData.data[idx + 3];
+                if (a < 128) continue;
+
+                const r = this.state.logoImageData.data[idx];
+                const g = this.state.logoImageData.data[idx + 1];
+                const b = this.state.logoImageData.data[idx + 2];
+                const qR = quantize(r);
+                const qG = quantize(g);
+                const qB = quantize(b);
+                const key = `${qR},${qG},${qB}`;
+
+                if (!buckets.has(key)) {
+                    buckets.set(key, { count: 1, r: r, g: g, b: b });
+                } else {
+                    const entry = buckets.get(key);
+                    entry.count += 1;
+                    entry.r += r;
+                    entry.g += g;
+                    entry.b += b;
+                }
+            }
+        }
+
+        if (buckets.size === 0) return null;
+
+        let best = null;
+        for (const entry of buckets.values()) {
+            if (!best || entry.count > best.count) {
+                best = entry;
+            }
+        }
+
+        return [
+            Math.round(best.r / best.count),
+            Math.round(best.g / best.count),
+            Math.round(best.b / best.count),
+            255
+        ];
+    },
+
+    /**
      * Get color for a module based on color mode
      */
-    getModuleColor(canvasX, canvasY, isDark, qrAreaSize) {
+    getModuleColor(canvasX, canvasY, isDark, qrAreaSize, moduleSize) {
         if (this.state.colorMode === 'default') {
             return isDark ? '#000000' : '#ffffff';
         }
@@ -195,7 +278,8 @@ const QRRenderer = {
             return isDark ? this.state.simpleDarkColor : this.state.simpleLightColor;
         }
 
-        let sampledRgba = this.sampleLogo(canvasX, canvasY, qrAreaSize);
+        const sampleSize = moduleSize * 0.5;
+        let sampledRgba = this.sampleLogoDominant(canvasX, canvasY, qrAreaSize, sampleSize);
 
         if (!sampledRgba || sampledRgba[3] < 128) {
             // Outside logo or transparent - use defaults based on color mode
@@ -335,7 +419,7 @@ const QRRenderer = {
                     const moduleY = offset + ((startRow + row) * moduleSize);
                     const moduleCenterX = ((startCol + col) * moduleSize) + moduleSize / 2;
                     const moduleCenterY = ((startRow + row) * moduleSize) + moduleSize / 2;
-                    const color = this.getModuleColor(moduleCenterX, moduleCenterY, false, qrAreaSize);
+                    const color = this.getModuleColor(moduleCenterX, moduleCenterY, false, qrAreaSize, moduleSize);
                     this.drawModule(ctx, moduleX, moduleY, moduleSize, moduleSize, color, this.state.moduleShape, sizeFraction);
                 }
             }
@@ -533,7 +617,7 @@ const QRRenderer = {
 
                 const moduleCenterX = (col * moduleSize) + moduleSize / 2;
                 const moduleCenterY = (row * moduleSize) + moduleSize / 2;
-                const color = this.getModuleColor(moduleCenterX, moduleCenterY, isDark, qrAreaSize);
+                const color = this.getModuleColor(moduleCenterX, moduleCenterY, isDark, qrAreaSize, moduleSize);
 
                 this.drawModule(ctx, moduleX, moduleY, moduleSize, moduleSize, color, this.state.moduleShape, sizeFraction);
             }
@@ -800,7 +884,7 @@ const QRRenderer = {
 
                 const moduleCenterX = (col * moduleSize) + moduleSize / 2;
                 const moduleCenterY = (row * moduleSize) + moduleSize / 2;
-                const color = this.getModuleColor(moduleCenterX, moduleCenterY, isDark, qrAreaSize);
+                const color = this.getModuleColor(moduleCenterX, moduleCenterY, isDark, qrAreaSize, moduleSize);
 
                 this.drawModule(ctx, moduleX, moduleY, moduleSize, moduleSize, color, this.state.moduleShape, sizeFraction);
             }
