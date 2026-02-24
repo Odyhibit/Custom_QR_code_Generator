@@ -928,7 +928,11 @@ const App = {
         // Background fill (shown when logo is loaded)
         document.getElementById('backgroundFill').addEventListener('change', (e) => {
             QRRenderer.state.backgroundFill = e.target.value;
-            this.renderMainCanvas();
+            if (this.state.currentStep === 2) {
+                this.renderLogoCanvas();
+            } else {
+                this.renderMainCanvas();
+            }
         });
 
         // Module size
@@ -1314,8 +1318,8 @@ const App = {
 
             let moduleValue;
             if (!sampledRgba || sampledRgba[3] < 128) {
-                // Outside logo or transparent - keep current masked value
-                moduleValue = Boolean(testMatrix[row][col]);
+                // Outside logo or transparent - use backgroundFill setting
+                moduleValue = QRRenderer.state.backgroundFill === 'dark';
             } else {
                 // Match logo luminance
                 const sampledLuminance = 0.299 * sampledRgba[0] + 0.587 * sampledRgba[1] + 0.114 * sampledRgba[2];
