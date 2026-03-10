@@ -867,10 +867,10 @@ const QRRenderer = {
                             const paintedDark = deleteState.deletedModuleEdits.get(cellKey);
                             const moduleX = offset + (col * moduleSize);
                             const moduleY = offset + (row * moduleSize);
-                            // Use simple dark/light colors for painted deleted modules
+                            // Use palette dark/light colors for painted deleted modules
                             const color = paintedDark ?
-                                (this.state.simpleDarkColor || '#000000') :
-                                (this.state.simpleLightColor || '#ffffff');
+                                (this.state.darkPalette[0] || '#000000') :
+                                (this.state.lightPalette[0] || '#ffffff');
                             this.drawModule(ctx, moduleX, moduleY, moduleSize, moduleSize, color, this.state.moduleShape, sizeFraction);
                         }
                         // If not painted, skip (leave transparent/background)
