@@ -626,19 +626,19 @@ function placeFormatInfo(matrix, eccLevel, maskPattern, version) {
     // Position 7: row 8, column 8
     const bit7 = (formatBits >> (14 - 7)) & 1;
     matrix[8][8] = bit7 === 1;
-    matrix[size - 8][8] = bit7 === 1;
+    matrix[8][size - 8] = bit7 === 1;   // copy 2: horizontal strip col N-8
 
     // Position 8: row 7, column 8
     const bit8 = (formatBits >> (14 - 8)) & 1;
     matrix[7][8] = bit8 === 1;
-    matrix[8][size - 8] = bit8 === 1;
+    matrix[8][size - 7] = bit8 === 1;   // copy 2: horizontal strip col N-7
 
     // Positions 9-14: column 8, rows 5,4,3,2,1,0 (skip row 6 for timing)
     const rows = [5, 4, 3, 2, 1, 0];
     for (let i = 0; i < 6; i++) {
         const bit = (formatBits >> (14 - (9 + i))) & 1;
         matrix[rows[i]][8] = bit === 1;
-        matrix[8][size - 7 + i] = bit === 1;
+        matrix[8][size - 6 + i] = bit === 1;  // copy 2: cols N-6 to N-1
     }
 
     // Ensure dark module is always black (re-assert after format placement)

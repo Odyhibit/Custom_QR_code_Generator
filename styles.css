@@ -983,3 +983,106 @@ body {
         justify-content: center;
     }
 }
+
+/* ── Scannability range bar ─────────────────────────────────────────────── */
+
+.scannability-bar {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    margin-top: 12px;
+    padding: 10px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.scan-bar-title {
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+}
+
+.scan-dots-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.scan-dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid var(--border);
+    background: var(--background);
+    transition: background 0.15s, border-color 0.15s;
+    flex-shrink: 0;
+}
+
+.scan-dot.pending {
+    background: var(--background);
+    border-color: var(--border);
+    opacity: 0.5;
+}
+
+.scan-dot.pass {
+    background: var(--success);
+    border-color: var(--success);
+}
+
+.scan-dot.fail {
+    background: var(--error);
+    border-color: var(--error);
+}
+
+
+
+.scan-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: 100%;
+}
+
+.scan-control-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.scan-control-row span:first-child {
+    width: 24px;
+    flex-shrink: 0;
+}
+
+.scan-control-row input[type="range"] {
+    flex: 1;
+    height: 4px;
+    cursor: pointer;
+}
+
+.scan-control-row span:last-child {
+    width: 28px;
+    text-align: right;
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+}
+
+.scan-debug-row {
+    display: flex;
+    gap: 4px;
+    margin-top: 6px;
+}
+
+.scan-debug-row canvas {
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    image-rendering: pixelated;
+}

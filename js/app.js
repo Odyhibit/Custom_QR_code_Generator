@@ -25,6 +25,8 @@ const App = {
         paddingModuleMap: null,
         editableCells: new Set(),
         originalPaddingBytes: null,
+        // Advanced GJ mode
+        smartEccMode: false,
         // Paint mode state
         interactionMode: 'paint',   // 'logo' or 'paint'
         brushMode: 'black',         // 'black' or 'white'
@@ -40,8 +42,10 @@ const App = {
         deleteState: {
             deletedCodewords: new Set(),
             deletedModuleEdits: new Map(), // "row,col" → boolean (true=dark) for painted deleted modules
+            hiddenModules: new Set(),      // "row,col" keys for individually hidden modules
             hoveredCodewordIndex: null,
             hoveredBlockIndex: null,
+            hoveredHideCell: null,         // {row, col} for hover highlight in hide mode
             codewordMap: null,
             reverseMap: null,
             blockInfo: [],
@@ -50,7 +54,7 @@ const App = {
                           '#F7DC6F','#BB8FCE','#85C1E2','#F8B88B','#ABEBC6'],
             hideOverlays: false,
             // Paint mode for deleted modules
-            interactionMode: 'delete', // 'delete' or 'paint'
+            interactionMode: 'delete', // 'delete', 'hide', or 'paint'
             brushMode: 'black',
             isPainting: false,
             isBoxSelecting: false,
@@ -70,6 +74,7 @@ const App = {
         this.setupStyleControls();
         this.setupDeleteStep();
         this.setupProjectIO();
+        QRScannability.initControls();
 
         // Render initial form
         this.renderForm('text');
@@ -354,11 +359,13 @@ const App = {
             // Clear delete state on regeneration
             this.state.deleteState.deletedCodewords = new Set();
             this.state.deleteState.deletedModuleEdits = new Map();
+            this.state.deleteState.hiddenModules = new Set();
             this.state.deleteState.codewordMap = null;
             this.state.deleteState.reverseMap = null;
             this.state.deleteState.blockInfo = [];
             this.state.deleteState.hoveredCodewordIndex = null;
             this.state.deleteState.hoveredBlockIndex = null;
+            this.state.deleteState.hoveredHideCell = null;
 
             // Determine version
             let version = this.getSelectedVersion();
@@ -630,6 +637,11 @@ const App = {
             this.optimizeMaskForLogo();
         });
 
+        // Smart ECC mode checkbox
+        document.getElementById('smartEccMode').addEventListener('change', (e) => {
+            this.state.smartEccMode = e.target.checked;
+        });
+
         // Logo scale
         const logoScale = document.getElementById('logoScale');
         const logoScaleValue = document.getElementById('logoScaleValue');
@@ -818,6 +830,7 @@ const App = {
         if (!canvas || !this.state.matrix) return;
 
         QRRenderer.render(canvas, this.state.matrix, this.state.version);
+        QRScannability.schedule(canvas, this.state.qrContent, 'main');
     },
 
     // Setup style controls (step 3)
@@ -1488,6 +1501,148 @@ const App = {
         };
     },
 
+    // ========== SMART ECC MODE (GJ SOLVER) ==========
+
+    // Advanced logo blend using Gauss-Jordan elimination to match ECC modules.
+    //
+    // Unlike the basic mode (which only edits padding bytes and optimizes mask):
+    //   - Padding cells under the logo are constrained to match the logo color.
+    //   - Padding cells NOT under the logo are left free (GJ uses them as degrees
+    //     of freedom to control ECC module values).
+    //   - ECC cells under the logo become targets: GJ solves for free padding
+    //     bits whose RS contribution steers those ECC bits to match the logo.
+    applyLogoBlendAdvanced() {
+        if (!QRRenderer.state.logoImg || !QRRenderer.state.logoImageData) {
+            return { success: false, message: 'Please upload a logo first.' };
+        }
+        if (!this.state.paddingModuleMap || this.state.editableCells.size === 0) {
+            return { success: false, message: 'No padding modules available to modify.' };
+        }
+
+        const version = this.state.version;
+        const eccLevel = this.state.eccLevel;
+        const size = this.state.matrix.length;
+        const quietZone = QRRenderer.state.quietZone;
+        const totalSize = size + quietZone * 2;
+        const canvasSize = 450;
+        const moduleSize = canvasSize / totalSize;
+        const qrAreaSize = size * moduleSize;
+        const sampleSize = moduleSize * 0.5;
+
+        // Sample logo at every module position to build a desired-color map.
+        const logoModules = new Map(); // "row,col" → isDark (bool)
+        for (let row = 0; row < size; row++) {
+            for (let col = 0; col < size; col++) {
+                const canvasX = (col + 0.5) * moduleSize;
+                const canvasY = (row + 0.5) * moduleSize;
+                const rgba = QRRenderer.sampleLogoDominant(canvasX, canvasY, qrAreaSize, sampleSize);
+                if (!rgba || rgba[3] < 128) continue;
+                const lum = 0.299 * rgba[0] + 0.587 * rgba[1] + 0.114 * rgba[2];
+                logoModules.set(`${row},${col}`, lum < 128);
+            }
+        }
+
+        if (logoModules.size === 0) {
+            return { success: false, message: 'No modules inside logo area to optimize.' };
+        }
+
+        // Build GJ maps in a single zigzag pass.
+        const numDataBytes = this.state.bitstreamData.dataBytes.length;
+        const { moduleToInterleavedBit, eccModuleMap, interleavedBitToBlock } =
+            buildGJMaps(version, eccLevel, numDataBytes);
+
+        // Padding targets: editable cells that fall under the logo.
+        const paddingTargets = new Map();
+        for (const [cellKey, isDark] of logoModules) {
+            if (this.state.editableCells.has(cellKey)) {
+                paddingTargets.set(cellKey, isDark);
+            }
+        }
+
+        // ECC targets: ECC cells that fall under the logo.
+        const eccTargets = new Map();
+        for (const [cellKey, isDark] of logoModules) {
+            if (eccModuleMap.has(cellKey)) {
+                eccTargets.set(cellKey, isDark);
+            }
+        }
+
+        // If there are no ECC targets, the advanced solver offers no benefit
+        // over the basic one — fall back gracefully.
+        if (eccTargets.size === 0) {
+            return this.applyLogoBlendToPadding();
+        }
+
+        // Select best mask using the existing scoring (tests all 8 patterns,
+        // picks the one that maximises padding-only matches across all logo modules).
+        const bestMask = (() => {
+            let best = 0;
+            let bestMatches = -1;
+            for (let mp = 0; mp < 8; mp++) {
+                const r = this.simulateMaskWithLogoBlend(mp, logoModules, moduleSize, qrAreaSize);
+                if (r.matches > bestMatches) { bestMatches = r.matches; best = mp; }
+            }
+            return best;
+        })();
+
+        // Message byte boundary (bytes before this must not be modified).
+        const paddingInfo = this.identifyPaddingBytes();
+        const messageByteCount = paddingInfo.startByteIndex;
+
+        // Run GJ solver with the locked mask.
+        const solvedDataBytes = gjSolveModuleBits({
+            dataBytes: [...this.state.bitstreamData.dataBytes],
+            version,
+            eccLevel,
+            maskPattern: bestMask,
+            messageByteCount,
+            targets: paddingTargets,
+            moduleToInterleavedBit,
+            interleavedBitToBlock,
+            eccTargets,
+            eccModuleMap
+        });
+
+        // Apply solved data bytes and recalculate ECC.
+        this.state.bitstreamData.dataBytes = solvedDataBytes;
+        const paddingByteCount = paddingInfo.paddingByteIndices.length;
+        this.state.bitstreamData.padBytes =
+            solvedDataBytes.slice(messageByteCount, messageByteCount + paddingByteCount);
+        this.state.originalPaddingBytes = [...this.state.bitstreamData.padBytes];
+
+        const blocks = splitIntoBlocks(solvedDataBytes, version, eccLevel, blockSizeTable);
+        calculateEccForBlocks(blocks);
+        this.state.blocks = blocks;
+
+        // Regenerate matrix with the locked mask.
+        const interleaved = interleaveBlocks(blocks);
+        const newMatrix = createMatrix(size);
+        placeFunctionPatterns(newMatrix, version);
+        placeDataBits(newMatrix, interleaved);
+        applyMask(newMatrix, bestMask, version);
+        placeFormatInfo(newMatrix, eccLevel, bestMask, version);
+        placeVersionInfo(newMatrix, version);
+        this.state.matrix = newMatrix;
+        this.state.maskPattern = bestMask;
+
+        // Count matched logo modules for reporting.
+        let matches = 0;
+        for (const [cellKey, wantsDark] of logoModules) {
+            const [row, col] = cellKey.split(',').map(Number);
+            if (Boolean(newMatrix[row][col]) === wantsDark) matches++;
+        }
+        const total = logoModules.size;
+
+        return {
+            success: true,
+            bestMask,
+            matches,
+            total,
+            percentage: Math.round((matches / total) * 100),
+            eccTargets: eccTargets.size
+        };
+    },
+
     // ========== PAINT MODE ==========
 
     // Setup paint mode controls and event handlers
@@ -2001,6 +2156,20 @@ const App = {
             this.state.deleteState,
             { showOverlays: !this.state.deleteState.hideOverlays }
         );
+
+        // Scan test uses a clean render (no overlays) so ZXing sees what the
+        // exported image looks like without the codeword highlight colors.
+        const cleanCanvas = document.createElement('canvas');
+        cleanCanvas.width = canvas.width;
+        cleanCanvas.height = canvas.height;
+        QRRenderer.renderWithDeletion(
+            cleanCanvas,
+            this.state.matrix,
+            this.state.version,
+            this.state.deleteState,
+            { showOverlays: false }
+        );
+        QRScannability.schedule(cleanCanvas, this.state.qrContent, 'delete');
     },
 
     // Setup delete step: event handlers, reset, export
@@ -2022,11 +2191,21 @@ const App = {
                 const brushControls = document.getElementById('deleteBrushControls');
                 brushControls.style.display = mode === 'paint' ? 'flex' : 'none';
 
+                // Clear hover state when switching modes
+                ds.hoveredCodewordIndex = null;
+                ds.hoveredBlockIndex = null;
+                ds.hoveredHideCell = null;
+                this.updateDeleteHoverIndicator();
+
                 const modeHint = document.getElementById('deleteModeHint');
                 if (modeHint) {
-                    modeHint.textContent = mode === 'paint'
-                        ? 'Click to paint, Shift+drag to fill area'
-                        : 'Click to delete/restore codewords';
+                    if (mode === 'paint') {
+                        modeHint.textContent = 'Click to paint, Shift+drag to fill area';
+                    } else if (mode === 'hide') {
+                        modeHint.textContent = 'Click to hide/show modules, Shift+drag to hide area';
+                    } else {
+                        modeHint.textContent = 'Click to delete/restore codewords';
+                    }
                 }
 
                 this.renderDeleteCanvas();
@@ -2096,6 +2275,16 @@ const App = {
                     this.renderDeleteCanvas();
                 }
                 e.preventDefault();
+            } else if (ds.interactionMode === 'hide') {
+                const cell = getCellFromEvent(e);
+                if (!cell) return;
+
+                if (e.shiftKey) {
+                    ds.isBoxSelecting = true;
+                    ds.boxSelectStart = cell;
+                    ds.boxSelectEnd = cell;
+                    e.preventDefault();
+                }
             }
         });
 
@@ -2120,6 +2309,26 @@ const App = {
                 return;
             }
 
+            if (ds.interactionMode === 'hide') {
+                if (ds.isBoxSelecting) {
+                    const cell = getCellFromEvent(e);
+                    if (cell) {
+                        ds.boxSelectEnd = cell;
+                        this.renderDeleteCanvas();
+                        this.drawDeleteBoxSelection();
+                    }
+                } else {
+                    const cell = getCellFromEvent(e);
+                    const newKey = cell ? `${cell.row},${cell.col}` : null;
+                    const oldKey = ds.hoveredHideCell ? `${ds.hoveredHideCell.row},${ds.hoveredHideCell.col}` : null;
+                    if (newKey !== oldKey) {
+                        ds.hoveredHideCell = cell;
+                        this.renderDeleteCanvas();
+                    }
+                }
+                return;
+            }
+
             // Delete mode: hover highlighting
             const cell = getCellFromEvent(e);
             if (cell) {
@@ -2138,7 +2347,12 @@ const App = {
         // Mouseup
         canvas.addEventListener('mouseup', () => {
             if (ds.isBoxSelecting) {
-                this.applyDeleteBoxSelection();
+                if (ds.interactionMode === 'hide') {
+                    this.applyHideBoxSelection();
+                    this.updateDeleteBlockLegend();
+                } else {
+                    this.applyDeleteBoxSelection();
+                }
                 ds.isBoxSelecting = false;
                 ds.boxSelectStart = null;
                 ds.boxSelectEnd = null;
@@ -2150,7 +2364,12 @@ const App = {
         // Mouseleave
         canvas.addEventListener('mouseleave', () => {
             if (ds.isBoxSelecting) {
-                this.applyDeleteBoxSelection();
+                if (ds.interactionMode === 'hide') {
+                    this.applyHideBoxSelection();
+                    this.updateDeleteBlockLegend();
+                } else {
+                    this.applyDeleteBoxSelection();
+                }
                 ds.isBoxSelecting = false;
                 ds.boxSelectStart = null;
                 ds.boxSelectEnd = null;
@@ -2158,13 +2377,32 @@ const App = {
             ds.isPainting = false;
             ds.hoveredCodewordIndex = null;
             ds.hoveredBlockIndex = null;
+            ds.hoveredHideCell = null;
             this.updateDeleteHoverIndicator();
             this.renderDeleteCanvas();
         });
 
-        // Click (for delete mode)
+        // Click (for delete and hide modes)
         canvas.addEventListener('click', (e) => {
             if (!this.state.matrix || !ds.reverseMap) return;
+
+            if (ds.interactionMode === 'hide') {
+                if (e.shiftKey) return; // handled by box select
+                const cell = getCellFromEvent(e);
+                if (!cell) return;
+                const cwIdx = this.getCodewordIndexForModule(cell.row, cell.col);
+                if (cwIdx === null) return; // not a data/ECC module
+                const cellKey = `${cell.row},${cell.col}`;
+                if (ds.hiddenModules.has(cellKey)) {
+                    ds.hiddenModules.delete(cellKey);
+                } else {
+                    ds.hiddenModules.add(cellKey);
+                }
+                this.renderDeleteCanvas();
+                this.updateDeleteBlockLegend();
+                return;
+            }
+
             if (ds.interactionMode !== 'delete') return;
 
             const cell = getCellFromEvent(e);
@@ -2213,10 +2451,11 @@ const App = {
 
         // Reset deletions button
         document.getElementById('resetDeletionsBtn').addEventListener('click', () => {
-            if (ds.deletedCodewords.size === 0 && ds.deletedModuleEdits.size === 0) return;
+            if (ds.deletedCodewords.size === 0 && ds.deletedModuleEdits.size === 0 && ds.hiddenModules.size === 0) return;
 
             ds.deletedCodewords.clear();
             ds.deletedModuleEdits.clear();
+            ds.hiddenModules.clear();
             if (ds.blockInfo) {
                 ds.blockInfo.forEach(block => { block.deletedCount = 0; });
             }
@@ -2284,7 +2523,7 @@ const App = {
         ctx.setLineDash([]);
     },
 
-    // Apply box selection to deleted modules
+    // Apply box selection to deleted modules (paint mode)
     applyDeleteBoxSelection() {
         const ds = this.state.deleteState;
         const start = ds.boxSelectStart;
@@ -2308,6 +2547,28 @@ const App = {
         }
     },
 
+    // Apply box selection to hide individual modules (hide mode)
+    applyHideBoxSelection() {
+        const ds = this.state.deleteState;
+        const start = ds.boxSelectStart;
+        const end = ds.boxSelectEnd;
+        if (!start || !end) return;
+
+        const minRow = Math.min(start.row, end.row);
+        const maxRow = Math.max(start.row, end.row);
+        const minCol = Math.min(start.col, end.col);
+        const maxCol = Math.max(start.col, end.col);
+
+        for (let row = minRow; row <= maxRow; row++) {
+            for (let col = minCol; col <= maxCol; col++) {
+                const cwIdx = this.getCodewordIndexForModule(row, col);
+                if (cwIdx !== null) {
+                    ds.hiddenModules.add(`${row},${col}`);
+                }
+            }
+        }
+    },
+
     // Update the block legend in Step 4 side panel
     updateDeleteBlockLegend() {
         const ds = this.state.deleteState;
@@ -2317,6 +2578,27 @@ const App = {
         const deletedEl = document.getElementById('deleteDeletedCount');
         if (totalEl) totalEl.textContent = ds.totalCodewords;
         if (deletedEl) deletedEl.textContent = ds.deletedCodewords.size;
+
+        // Hidden modules summary
+        const hiddenCount = ds.hiddenModules.size;
+        const hiddenSummaryEl = document.getElementById('hiddenModulesSummary');
+        if (hiddenSummaryEl) {
+            if (hiddenCount > 0) {
+                const affectedCwSet = new Set();
+                ds.hiddenModules.forEach(cellKey => {
+                    const [row, col] = cellKey.split(',').map(Number);
+                    const cwIdx = this.getCodewordIndexForModule(row, col);
+                    if (cwIdx !== null) affectedCwSet.add(cwIdx);
+                });
+                const affectedCwCount = affectedCwSet.size;
+                document.getElementById('hiddenModulesText').textContent =
+                    `${hiddenCount} module${hiddenCount !== 1 ? 's' : ''} hidden` +
+                    ` (affects ${affectedCwCount} codeword${affectedCwCount !== 1 ? 's' : ''})`;
+                hiddenSummaryEl.style.display = 'block';
+            } else {
+                hiddenSummaryEl.style.display = 'none';
+            }
+        }
 
         // Build block legend HTML
         const legend = document.getElementById('deleteBlockLegend');
@@ -2508,6 +2790,7 @@ const App = {
             },
             deletedCodewords: Array.from(this.state.deleteState.deletedCodewords),
             deletedModuleEdits: Array.from(this.state.deleteState.deletedModuleEdits.entries()),
+            hiddenModules: Array.from(this.state.deleteState.hiddenModules),
             maskPattern: this.state.maskPattern,
             padBytes: this.state.bitstreamData ? [...this.state.bitstreamData.padBytes] : null
         };
@@ -2694,6 +2977,9 @@ const App = {
             if (data.deletedModuleEdits && data.deletedModuleEdits.length > 0) {
                 this.state.deleteState.deletedModuleEdits = new Map(data.deletedModuleEdits);
             }
+            if (data.hiddenModules && data.hiddenModules.length > 0) {
+                this.state.deleteState.hiddenModules = new Set(data.hiddenModules);
+            }
 
             // (g) Navigate to Step 1
             this.goToStep(1);
@@ -2769,7 +3055,9 @@ const App = {
 
         // Small delay to allow UI to update
         setTimeout(() => {
-            const result = this.applyLogoBlendToPadding();
+            const result = this.state.smartEccMode
+                ? this.applyLogoBlendAdvanced()
+                : this.applyLogoBlendToPadding();
 
             if (!result.success) {
                 resultEl.textContent = result.message;
@@ -2778,7 +3066,11 @@ const App = {
             }
 
             // Show result
-            resultEl.innerHTML = `<strong>Optimized!</strong> Using mask ${result.bestMask} - ${result.matches}/${result.total} modules match logo (${result.percentage}%)`;
+            if (result.eccTargets !== undefined) {
+                resultEl.innerHTML = `<strong>Optimized!</strong> Using mask ${result.bestMask} — ${result.matches}/${result.total} logo modules matched (${result.percentage}%), ${result.eccTargets} ECC modules targeted`;
+            } else {
+                resultEl.innerHTML = `<strong>Optimized!</strong> Using mask ${result.bestMask} - ${result.matches}/${result.total} modules match logo (${result.percentage}%)`;
+            }
             resultEl.style.color = '#10b981';
 
             // Clear manual edits (optimization replaces them) and rebuild map
@@ -2788,6 +3080,7 @@ const App = {
             // Clear delete state since matrix changed
             this.state.deleteState.deletedCodewords = new Set();
             this.state.deleteState.deletedModuleEdits = new Map();
+            this.state.deleteState.hiddenModules = new Set();
             this.state.deleteState.codewordMap = null;
             this.state.deleteState.reverseMap = null;
             this.updatePaintControlsVisibility();

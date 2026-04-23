@@ -188,6 +188,11 @@
 
                     <!-- Optimize Mask for Logo (only when logo loaded) -->
                     <div id="optimizeMaskSection" class="control-group" style="display: none;">
+                        <label class="checkbox-inline" style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer;">
+                            <input type="checkbox" id="smartEccMode">
+                            <span style="font-size: 13px;">Smart ECC mode</span>
+                        </label>
+                        <p class="control-hint" style="margin-top: 0; margin-bottom: 8px; font-size: 11px;">Uses free padding cells to match ECC modules under the logo</p>
                         <button type="button" class="btn btn-secondary" id="optimizeMaskBtn" style="width: 100%;">
                             <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z"/></svg>
                             Match Padding to Logo
@@ -226,6 +231,35 @@
                 <!-- Main Preview -->
                 <div class="preview-main">
                     <canvas id="mainCanvas" width="500" height="500"></canvas>
+                    <div class="scannability-bar">
+                        <span class="scan-bar-title">Scannability</span>
+                        <div class="scan-dots-wrap">
+                            <div class="scan-dot" id="scan-dot-main-0"></div>
+                            <div class="scan-dot" id="scan-dot-main-1"></div>
+                            <div class="scan-dot" id="scan-dot-main-2"></div>
+                            <div class="scan-dot" id="scan-dot-main-3"></div>
+                            <div class="scan-dot" id="scan-dot-main-4"></div>
+                        </div>
+                        <div class="scan-controls">
+                            <div class="scan-control-row">
+                                <span>Tilt</span>
+                                <input type="range" id="scan-angle-main" min="0" max="20" value="5" step="1">
+                                <span id="scan-angle-val-main">5°</span>
+                            </div>
+                            <div class="scan-control-row">
+                                <span>Blur</span>
+                                <input type="range" id="scan-blur-main" min="0" max="5" value="1" step="0.5">
+                                <span id="scan-blur-val-main">1px</span>
+                            </div>
+                        </div>
+                        <div class="scan-debug-row">
+                            <canvas id="scan-debug-main-0" width="80" height="80" title="1024px"></canvas>
+                            <canvas id="scan-debug-main-1" width="80" height="80" title="512px"></canvas>
+                            <canvas id="scan-debug-main-2" width="80" height="80" title="256px"></canvas>
+                            <canvas id="scan-debug-main-3" width="80" height="80" title="128px"></canvas>
+                            <canvas id="scan-debug-main-4" width="80" height="80" title="64px"></canvas>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Controls Panel -->
@@ -379,6 +413,7 @@
                     <div id="deletePaintModeControls" class="paint-mode-controls">
                         <div class="mode-toggle">
                             <button type="button" class="mode-btn active" data-mode="delete">Delete Codewords</button>
+                            <button type="button" class="mode-btn" data-mode="hide">Hide Modules</button>
                             <button type="button" class="mode-btn" data-mode="paint">Paint Deleted</button>
                         </div>
                         <div id="deleteBrushControls" class="brush-controls" style="display: none;">
@@ -389,6 +424,35 @@
                     </div>
                     <canvas id="deleteCanvas" width="500" height="500"></canvas>
                     <div id="deleteHoverIndicator" class="delete-hover-indicator" style="display: none;"></div>
+                    <div class="scannability-bar">
+                        <span class="scan-bar-title">Scannability</span>
+                        <div class="scan-dots-wrap">
+                            <div class="scan-dot" id="scan-dot-delete-0"></div>
+                            <div class="scan-dot" id="scan-dot-delete-1"></div>
+                            <div class="scan-dot" id="scan-dot-delete-2"></div>
+                            <div class="scan-dot" id="scan-dot-delete-3"></div>
+                            <div class="scan-dot" id="scan-dot-delete-4"></div>
+                        </div>
+                        <div class="scan-controls">
+                            <div class="scan-control-row">
+                                <span>Tilt</span>
+                                <input type="range" id="scan-angle-delete" min="0" max="20" value="5" step="1">
+                                <span id="scan-angle-val-delete">5°</span>
+                            </div>
+                            <div class="scan-control-row">
+                                <span>Blur</span>
+                                <input type="range" id="scan-blur-delete" min="0" max="5" value="1" step="0.5">
+                                <span id="scan-blur-val-delete">1px</span>
+                            </div>
+                        </div>
+                        <div class="scan-debug-row">
+                            <canvas id="scan-debug-delete-0" width="80" height="80" title="1024px"></canvas>
+                            <canvas id="scan-debug-delete-1" width="80" height="80" title="512px"></canvas>
+                            <canvas id="scan-debug-delete-2" width="80" height="80" title="256px"></canvas>
+                            <canvas id="scan-debug-delete-3" width="80" height="80" title="128px"></canvas>
+                            <canvas id="scan-debug-delete-4" width="80" height="80" title="64px"></canvas>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Right: Side panel -->
@@ -403,6 +467,10 @@
                             <span>Deleted:</span>
                             <strong id="deleteDeletedCount">0</strong>
                         </div>
+                    </div>
+                    <!-- Hidden modules info (shown when modules are hidden) -->
+                    <div id="hiddenModulesSummary" style="display: none; font-size: 12px; color: #b45309; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 4px; padding: 6px 8px; margin-bottom: 12px;">
+                        <span id="hiddenModulesText"></span>
                     </div>
 
                     <!-- Block Legend -->
@@ -460,6 +528,9 @@
     <script src="js/qr-types.js"></script>
     <script src="js/color-utils.js"></script>
     <script src="js/qr-renderer.js"></script>
+    <script src="js/gj-solver.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <script src="js/qr-scannability.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>

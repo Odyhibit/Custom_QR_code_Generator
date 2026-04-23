@@ -857,8 +857,14 @@ const QRRenderer = {
                     continue;
                 }
 
-                // Check if module belongs to a deleted codeword
+                // Check if module belongs to a deleted codeword or is individually hidden
                 const cellKey = `${row},${col}`;
+
+                // Individually hidden modules — always skip rendering
+                if (deleteState.hiddenModules && deleteState.hiddenModules.has(cellKey)) {
+                    continue;
+                }
+
                 if (deleteState.reverseMap) {
                     const cwIdx = deleteState.reverseMap.get(cellKey);
                     if (cwIdx !== undefined && deleteState.deletedCodewords.has(cwIdx)) {
@@ -901,10 +907,33 @@ const QRRenderer = {
         this.drawFinder(ctx, size - 7, 0, moduleSize, offset, finderOuter, finderMiddle, finderCenter, sizeFraction, size);
 
         // Draw overlays if requested
-        if (showOverlays && deleteState.reverseMap) {
+        if (showOverlays) {
             for (let row = 0; row < size; row++) {
                 for (let col = 0; col < size; col++) {
                     const cellKey = `${row},${col}`;
+                    const moduleX = offset + (col * moduleSize);
+                    const moduleY = offset + (row * moduleSize);
+
+                    // Orange dashed outline for hidden modules
+                    const isHidden = deleteState.hiddenModules && deleteState.hiddenModules.has(cellKey);
+                    if (isHidden) {
+                        ctx.strokeStyle = '#f59e0b';
+                        ctx.lineWidth = 1.5;
+                        ctx.setLineDash([3, 3]);
+                        ctx.strokeRect(moduleX + 1, moduleY + 1, moduleSize - 2, moduleSize - 2);
+                        ctx.setLineDash([]);
+                    }
+
+                    // Orange solid outline for hovered cell in hide mode
+                    const hc = deleteState.hoveredHideCell;
+                    if (hc && hc.row === row && hc.col === col && !isHidden) {
+                        ctx.strokeStyle = '#f59e0b';
+                        ctx.lineWidth = 2;
+                        ctx.strokeRect(moduleX + 1, moduleY + 1, moduleSize - 2, moduleSize - 2);
+                    }
+
+                    // Deleted/hovered codeword outlines
+                    if (!deleteState.reverseMap) continue;
                     const cwIdx = deleteState.reverseMap.get(cellKey);
                     if (cwIdx === undefined) continue;
 
@@ -912,9 +941,6 @@ const QRRenderer = {
                     const isHovered = cwIdx === deleteState.hoveredCodewordIndex;
 
                     if (!isDeleted && !isHovered) continue;
-
-                    const moduleX = offset + (col * moduleSize);
-                    const moduleY = offset + (row * moduleSize);
 
                     // Red outline for deleted (non-hovered)
                     if (isDeleted && !isHovered) {
