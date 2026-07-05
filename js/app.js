@@ -25,10 +25,19 @@ const App = {
         paddingModuleMap: null,
         editableCells: new Set(),
         originalPaddingBytes: null,
-        // Advanced GJ mode
-        smartEccMode: false,
-        // Paint mode state
-        interactionMode: 'paint',   // 'logo' or 'paint'
+        // Unified control-region state
+        controlState: {
+            regions: [],
+            manualTargets: new Map(),   // "row,col" -> boolean (true=dark)
+            lockedModules: new Set(),   // user-locked non-function modules
+            qualityPreset: 'intact',
+            allowDataOverwrite: false,
+            lastAnalysis: null,
+            lastSolveSummary: null,
+            defaultRegionInitialized: false
+        },
+        // Paint/control mode state
+        interactionMode: 'paint',   // 'logo', 'region', 'paint', or 'lock'
         brushMode: 'black',         // 'black' or 'white'
         paddingEdits: new Map(),     // "row,col" → boolean (true=dark)
         isPaintingModule: false,
@@ -141,6 +150,12 @@ const App = {
 
     // Go to specific step
     goToStep(step) {
+        if (this.state.currentStep === 2 && step > 2) {
+            if (!this.commitControlEditsBeforeLeavingStep2()) {
+                return;
+            }
+        }
+
         this.state.currentStep = step;
 
         // Update step buttons
@@ -354,6 +369,7 @@ const App = {
 
             // Clear paint state on regeneration
             this.state.paddingEdits = new Map();
+            this.resetControlStateForNewQR();
             this.resetPaintModeUI();
 
             // Clear delete state on regeneration
@@ -439,6 +455,9 @@ const App = {
                 this.state.editableCells = new Set();
                 this.state.originalPaddingBytes = null;
             }
+
+            this.initializeDefaultControlRegion();
+            this.runControlAnalysis(false);
         } catch (e) {
             console.error('QR generation error:', e);
             this.state.matrix = null;
@@ -574,7 +593,7 @@ const App = {
                     const modeHint = document.getElementById('modeHint');
                     if (modeHint) modeHint.textContent = 'Drag to move logo';
 
-                    // Show optimize section and flag logo loaded for style tab
+                    // Show logo-aware style options
                     const optimizeMaskSection = document.getElementById('optimizeMaskSection');
                     if (optimizeMaskSection) optimizeMaskSection.style.display = 'block';
                     const moduleColorMode = document.getElementById('moduleColorMode');
@@ -583,6 +602,8 @@ const App = {
                     if (simpleColorMode) simpleColorMode.style.display = 'none';
                     const backgroundFillGroup = document.getElementById('backgroundFillGroup');
                     if (backgroundFillGroup) backgroundFillGroup.style.display = 'block';
+                    const layerBlendGroup = document.getElementById('layerBlendGroup');
+                    if (layerBlendGroup) layerBlendGroup.style.display = 'block';
 
                     // Switch to palette mode for logo
                     QRRenderer.state.colorMode = 'palette';
@@ -591,11 +612,15 @@ const App = {
                     // Auto-detect background fill
                     this.autoDetectBackgroundFill();
 
+                    // Sync prep UI to defaults and show prep preview
+                    this.syncLogoPrepUI();
+
                     // Refresh palette pickers with newly extracted colors
                     this.displayPalette();
                     document.getElementById('paletteDisplay').style.display = 'block';
 
                     this.renderLogoCanvas();
+                    this.syncLogoRegion();
                 });
             }
         });
@@ -609,11 +634,9 @@ const App = {
             logoCanvas.classList.remove('draggable');
             this.resetPaintModeUI();
 
-            // Hide optimize section and color mode, switch to simple colors
+            // Hide logo-specific color mode, keep control workflow available
             const optimizeMaskSection = document.getElementById('optimizeMaskSection');
-            if (optimizeMaskSection) optimizeMaskSection.style.display = 'none';
-            const optimizeResult = document.getElementById('optimizeResult');
-            if (optimizeResult) optimizeResult.style.display = 'none';
+            if (optimizeMaskSection) optimizeMaskSection.style.display = 'block';
             const moduleColorMode = document.getElementById('moduleColorMode');
             if (moduleColorMode) moduleColorMode.style.display = 'none';
             const simpleColorMode = document.getElementById('simpleColorMode');
@@ -628,19 +651,19 @@ const App = {
             if (backgroundFillGroup) backgroundFillGroup.style.display = 'none';
             document.getElementById('backgroundFill').value = 'light';
             QRRenderer.state.backgroundFill = 'light';
+            const layerBlendGroup = document.getElementById('layerBlendGroup');
+            if (layerBlendGroup) layerBlendGroup.style.display = 'none';
+            QRRenderer.state.layers.enabled = false;
+            const layersEnabledEl = document.getElementById('layersEnabled');
+            if (layersEnabledEl) layersEnabledEl.checked = false;
+            const layerBlendControls = document.getElementById('layerBlendControls');
+            if (layerBlendControls) layerBlendControls.style.display = 'none';
 
             this.renderLogoCanvas();
         });
 
-        // Optimize mask button
-        document.getElementById('optimizeMaskBtn').addEventListener('click', () => {
-            this.optimizeMaskForLogo();
-        });
-
-        // Smart ECC mode checkbox
-        document.getElementById('smartEccMode').addEventListener('change', (e) => {
-            this.state.smartEccMode = e.target.checked;
-        });
+        this.setupControlWorkflowControls();
+        this.setupLogoPrepControls();
 
         // Logo scale
         const logoScale = document.getElementById('logoScale');
@@ -649,6 +672,7 @@ const App = {
             QRRenderer.state.logoScale = parseInt(e.target.value);
             logoScaleValue.textContent = e.target.value;
             this.renderLogoCanvas();
+            this.syncLogoRegionDebounced();
         });
 
         // Version select (in logo step)
@@ -673,6 +697,160 @@ const App = {
 
         // Logo dragging
         this.setupLogoDragging(logoCanvas);
+    },
+
+    // Sync logo prep UI controls to current QRRenderer.state.logoPrep values
+    syncLogoPrepUI() {
+        const prep = QRRenderer.state.logoPrep;
+
+        const bgEl = document.getElementById('logoPrepBackground');
+        if (bgEl) bgEl.value = prep.backgroundMode;
+
+        const tolGroup = document.getElementById('logoPrepToleranceGroup');
+        if (tolGroup) tolGroup.style.display = prep.backgroundMode !== 'none' ? 'block' : 'none';
+
+        const tolEl = document.getElementById('logoPrepTolerance');
+        if (tolEl) tolEl.value = prep.tolerance;
+        const tolVal = document.getElementById('logoPrepToleranceValue');
+        if (tolVal) tolVal.textContent = prep.tolerance;
+
+        const fillEl = document.getElementById('logoPrepFillHoles');
+        if (fillEl) fillEl.checked = prep.fillHoles;
+
+        const outlineEnabledEl = document.getElementById('logoPrepOutlineEnabled');
+        if (outlineEnabledEl) outlineEnabledEl.checked = prep.outlineEnabled;
+
+        const outlineOptions = document.getElementById('logoPrepOutlineOptions');
+        if (outlineOptions) outlineOptions.style.display = prep.outlineEnabled ? 'block' : 'none';
+
+        const outlineColorEl = document.getElementById('logoPrepOutlineColor');
+        if (outlineColorEl) outlineColorEl.value = prep.outlineColor;
+
+        const outlineWidthEl = document.getElementById('logoPrepOutlineWidth');
+        if (outlineWidthEl) {
+            outlineWidthEl.max = Math.max(100, prep.outlineWidth * 4);
+            outlineWidthEl.value = prep.outlineWidth;
+        }
+        const outlineWidthVal = document.getElementById('logoPrepOutlineWidthValue');
+        if (outlineWidthVal) outlineWidthVal.textContent = prep.outlineWidth;
+
+        this.updateLogoPrepPreview();
+    },
+
+    // Update the small prep preview image
+    updateLogoPrepPreview() {
+        const previewWrap = document.getElementById('logoPrepPreviewWrap');
+        const previewImg = document.getElementById('logoPrepPreview');
+        if (!previewWrap || !previewImg || !QRRenderer.state.logoImg) return;
+
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = QRRenderer.state.logoImg.width;
+        canvas.height = QRRenderer.state.logoImg.height;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(QRRenderer.state.logoImg, 0, 0);
+        previewImg.src = canvas.toDataURL('image/png');
+        previewWrap.style.display = 'block';
+    },
+
+    // Setup logo prep tool controls
+    setupLogoPrepControls() {
+        // Apply runs the full pipeline; all controls only update state + labels until then
+        const applyPrep = (autoDetect = true) => {
+            QRRenderer.applyLogoPrep(() => {
+                this.updateLogoPrepPreview();
+                if (autoDetect) this.autoDetectBackgroundFill();
+                this.displayPalette();
+                this.renderLogoCanvas();
+                if (this.state.currentStep === 3) this.renderMainCanvas();
+                this.syncLogoRegionDebounced(); // outline border may shift effective logo bounds
+            });
+        };
+
+        // Background removal dropdown — update state & bg fill immediately, but don't render
+        const bgEl = document.getElementById('logoPrepBackground');
+        if (bgEl) {
+            bgEl.addEventListener('change', (e) => {
+                QRRenderer.state.logoPrep.backgroundMode = e.target.value;
+                const tolGroup = document.getElementById('logoPrepToleranceGroup');
+                if (tolGroup) tolGroup.style.display = e.target.value !== 'none' ? 'block' : 'none';
+                // Update bg fill dropdown immediately so it's correct before Apply is clicked
+                if (e.target.value === 'white') {
+                    QRRenderer.state.backgroundFill = 'light';
+                    const bgFill = document.getElementById('backgroundFill');
+                    if (bgFill) bgFill.value = 'light';
+                } else if (e.target.value === 'black') {
+                    QRRenderer.state.backgroundFill = 'dark';
+                    const bgFill = document.getElementById('backgroundFill');
+                    if (bgFill) bgFill.value = 'dark';
+                }
+            });
+        }
+
+        const tolEl = document.getElementById('logoPrepTolerance');
+        if (tolEl) {
+            tolEl.addEventListener('input', (e) => {
+                QRRenderer.state.logoPrep.tolerance = parseInt(e.target.value);
+                const tolVal = document.getElementById('logoPrepToleranceValue');
+                if (tolVal) tolVal.textContent = e.target.value;
+            });
+        }
+
+        const fillEl = document.getElementById('logoPrepFillHoles');
+        if (fillEl) {
+            fillEl.addEventListener('change', (e) => {
+                QRRenderer.state.logoPrep.fillHoles = e.target.checked;
+            });
+        }
+
+        const outlineEnabledEl = document.getElementById('logoPrepOutlineEnabled');
+        if (outlineEnabledEl) {
+            outlineEnabledEl.addEventListener('change', (e) => {
+                QRRenderer.state.logoPrep.outlineEnabled = e.target.checked;
+                const outlineOptions = document.getElementById('logoPrepOutlineOptions');
+                if (outlineOptions) outlineOptions.style.display = e.target.checked ? 'block' : 'none';
+            });
+        }
+
+        const outlineColorEl = document.getElementById('logoPrepOutlineColor');
+        if (outlineColorEl) {
+            outlineColorEl.addEventListener('input', (e) => {
+                QRRenderer.state.logoPrep.outlineColor = e.target.value;
+            });
+        }
+
+        const outlineWidthEl = document.getElementById('logoPrepOutlineWidth');
+        if (outlineWidthEl) {
+            outlineWidthEl.addEventListener('input', (e) => {
+                QRRenderer.state.logoPrep.outlineWidth = parseInt(e.target.value);
+                const outlineWidthVal = document.getElementById('logoPrepOutlineWidthValue');
+                if (outlineWidthVal) outlineWidthVal.textContent = e.target.value;
+            });
+        }
+
+        const applyBtn = document.getElementById('logoPrepApplyBtn');
+        if (applyBtn) {
+            applyBtn.addEventListener('click', () => {
+                const bg = QRRenderer.state.logoPrep.backgroundMode;
+                applyPrep(bg === 'none'); // only auto-detect fill when no bg removal is active
+            });
+        }
+
+        const resetBtn = document.getElementById('logoPrepResetBtn');
+        if (resetBtn) {
+            resetBtn.addEventListener('click', () => {
+                QRRenderer.state.logoPrep = {
+                    backgroundMode: 'none',
+                    tolerance: 32,
+                    fillHoles: true,
+                    outlineEnabled: true,
+                    outlineColor: '#ffffff',
+                    outlineWidth: QRRenderer.getDefaultOutlineWidth()
+                };
+                this.syncLogoPrepUI();
+                applyPrep(true);
+            });
+        }
     },
 
     // Auto-detect best background fill based on logo
@@ -725,7 +903,7 @@ const App = {
         };
 
         canvas.addEventListener('mousedown', (e) => {
-            if (this.state.interactionMode === 'paint') {
+            if (this.state.interactionMode === 'paint' || this.state.interactionMode === 'lock' || this.state.interactionMode === 'region') {
                 this.handlePaintStart(e);
                 return;
             }
@@ -755,6 +933,7 @@ const App = {
             QRRenderer.state.logoY = Math.max(0, Math.min(100, this.state.logoStartY + deltaY));
 
             this.renderLogoCanvas();
+            this.syncLogoRegionDebounced();
         });
 
         document.addEventListener('mouseup', () => {
@@ -767,7 +946,7 @@ const App = {
 
         // Touch support
         canvas.addEventListener('touchstart', (e) => {
-            if (this.state.interactionMode === 'paint') {
+            if (this.state.interactionMode === 'paint' || this.state.interactionMode === 'lock' || this.state.interactionMode === 'region') {
                 this.handlePaintStart(e.touches[0]);
                 e.preventDefault();
                 return;
@@ -798,6 +977,7 @@ const App = {
             QRRenderer.state.logoY = Math.max(0, Math.min(100, this.state.logoStartY + deltaY));
 
             this.renderLogoCanvas();
+            this.syncLogoRegionDebounced();
         }, { passive: true });
 
         document.addEventListener('touchend', () => {
@@ -809,18 +989,57 @@ const App = {
         });
     },
 
+    // Set the control region to match the current logo bounds (in module grid coords)
+    syncLogoRegion() {
+        if (!this.state.matrix || !QRRenderer.state.logoImg) return;
+        const canvas = document.getElementById('logoCanvas');
+        if (!canvas) return;
+
+        const size = this.state.matrix.length;
+        const quietZone = QRRenderer.state.quietZone;
+        const moduleSize = canvas.width / (size + quietZone * 2);
+        const qrAreaSize = size * moduleSize;
+
+        const bounds = QRRenderer.getLogoBounds(qrAreaSize);
+        if (!bounds) return;
+
+        const colStart = Math.max(0, Math.floor(bounds.x / moduleSize));
+        const rowStart = Math.max(0, Math.floor(bounds.y / moduleSize));
+        const colEnd = Math.min(size - 1, Math.ceil((bounds.x + bounds.width) / moduleSize) - 1);
+        const rowEnd = Math.min(size - 1, Math.ceil((bounds.y + bounds.height) / moduleSize) - 1);
+
+        this.state.controlState.regions = [{
+            x: colStart,
+            y: rowStart,
+            width: Math.max(1, colEnd - colStart + 1),
+            height: Math.max(1, rowEnd - rowStart + 1)
+        }];
+        // Prevent initializeDefaultControlRegion from overwriting this
+        this.state.controlState.defaultRegionInitialized = true;
+    },
+
+    syncLogoRegionDebounced() {
+        clearTimeout(this._logoRegionTimer);
+        this._logoRegionTimer = setTimeout(() => this.syncLogoRegion(), 400);
+    },
+
     // Render logo canvas (step 2) - transparent modules or paint mode
     renderLogoCanvas() {
         const canvas = document.getElementById('logoCanvas');
         if (!canvas || !this.state.matrix) return;
 
-        if (this.state.interactionMode === 'paint') {
-            QRRenderer.renderForPainting(
-                canvas, this.state.matrix, this.state.version,
-                this.state.editableCells, this.state.paddingEdits, 0.4
-            );
-        } else {
+        if (this.state.interactionMode === 'logo') {
             QRRenderer.renderWithTransparency(canvas, this.state.matrix, this.state.version, 0.4);
+        } else {
+            const analysis = this.runControlAnalysis(false);
+            QRRenderer.renderForControl(
+                canvas,
+                this.state.matrix,
+                this.state.version,
+                this.state.controlState,
+                analysis,
+                0.4
+            );
         }
     },
 
@@ -835,15 +1054,56 @@ const App = {
 
     // Setup style controls (step 3)
     setupStyleControls() {
-        // Module shape (exclude finder shape buttons)
-        document.querySelectorAll('.shape-btn:not(.finder-shape-btn)').forEach(btn => {
+        // Module shape (top layer / main — excludes finder and bottom layer buttons)
+        document.querySelectorAll('.shape-btn:not(.finder-shape-btn):not(.layer-bottom-shape-btn)').forEach(btn => {
             btn.addEventListener('click', () => {
-                document.querySelectorAll('.shape-btn:not(.finder-shape-btn)').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.shape-btn:not(.finder-shape-btn):not(.layer-bottom-shape-btn)').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 QRRenderer.state.moduleShape = btn.dataset.shape;
                 this.renderMainCanvas();
             });
         });
+
+        // Bottom layer shape buttons
+        document.querySelectorAll('.layer-bottom-shape-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.layer-bottom-shape-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                QRRenderer.state.layers.bottomShape = btn.dataset.shape;
+                this.renderMainCanvas();
+            });
+        });
+
+        // Layer blending enable toggle
+        const layersEnabledEl = document.getElementById('layersEnabled');
+        if (layersEnabledEl) {
+            layersEnabledEl.addEventListener('change', (e) => {
+                QRRenderer.state.layers.enabled = e.target.checked;
+                const controls = document.getElementById('layerBlendControls');
+                if (controls) controls.style.display = e.target.checked ? 'block' : 'none';
+                this.renderMainCanvas();
+            });
+        }
+
+        // Bottom layer size slider
+        const bottomLayerSizeEl = document.getElementById('bottomLayerSize');
+        if (bottomLayerSizeEl) {
+            bottomLayerSizeEl.addEventListener('input', (e) => {
+                QRRenderer.state.layers.bottomSize = parseInt(e.target.value);
+                const val = document.getElementById('bottomLayerSizeValue');
+                if (val) val.textContent = e.target.value;
+                this.renderMainCanvas();
+            });
+        }
+
+        // Bottom layer color picker
+        const bottomLayerColorEl = document.getElementById('bottomLayerColor');
+        if (bottomLayerColorEl) {
+            bottomLayerColorEl.addEventListener('input', (e) => {
+                QRRenderer.state.layers.bottomColor = e.target.value;
+                this.renderMainCanvas();
+            });
+        }
 
         // Finder shape buttons
         document.querySelectorAll('.finder-shape-btn').forEach(btn => {
@@ -1058,13 +1318,254 @@ const App = {
 
     // ========== PADDING MODULE MAPPING ==========
 
+    resetControlStateForNewQR() {
+        this.state.controlState = {
+            regions: [],
+            manualTargets: new Map(),
+            lockedModules: new Set(),
+            qualityPreset: this.state.controlState?.qualityPreset || 'intact',
+            allowDataOverwrite: this.state.controlState?.allowDataOverwrite || false,
+            lastAnalysis: null,
+            lastSolveSummary: null,
+            defaultRegionInitialized: false
+        };
+    },
+
+    getControlPresetBudget(eccCount, preset = this.state.controlState.qualityPreset) {
+        const maxErrors = Math.floor(eccCount / 2);
+        if (preset === 'intact') return 0;
+        if (preset === 'balanced') return Math.max(0, Math.floor(maxErrors * 0.5));
+        return maxErrors;
+    },
+
+    initializeDefaultControlRegion() {
+        const cs = this.state.controlState;
+        if (!this.state.matrix || cs.defaultRegionInitialized) return;
+
+        const size = this.state.matrix.length;
+        const centerX = Math.floor(size * 0.46);
+        const centerY = Math.floor(size * 0.50);
+        const side = Math.max(9, Math.floor(size * 0.52));
+        const x = Math.max(0, Math.min(size - side, centerX - Math.floor(side / 2)));
+        const y = Math.max(0, Math.min(size - side, centerY - Math.floor(side / 2)));
+
+        cs.regions = [{ x, y, width: side, height: side }];
+        cs.defaultRegionInitialized = true;
+    },
+
+    getControlRegionCells(region = null) {
+        const cs = this.state.controlState;
+        const regions = region ? [region] : cs.regions;
+        const cells = new Set();
+        const size = this.state.matrix ? this.state.matrix.length : 0;
+
+        regions.forEach(r => {
+            const minRow = Math.max(0, r.y);
+            const maxRow = Math.min(size - 1, r.y + r.height - 1);
+            const minCol = Math.max(0, r.x);
+            const maxCol = Math.min(size - 1, r.x + r.width - 1);
+            for (let row = minRow; row <= maxRow; row++) {
+                for (let col = minCol; col <= maxCol; col++) {
+                    cells.add(`${row},${col}`);
+                }
+            }
+        });
+
+        return cells;
+    },
+
+    getBlockOffsets() {
+        const info = blockSizeTable[`${this.state.version}-${this.state.eccLevel}`];
+        const offsets = [];
+        if (!info) return offsets;
+        let offset = 0;
+        for (let i = 0; i < info.numBlocks; i++) {
+            offsets.push(offset);
+            offset += info.dataCodewordsInGroup1;
+        }
+        for (let i = 0; i < info.numBlocksInGroup2; i++) {
+            offsets.push(offset);
+            offset += info.dataCodewordsInGroup2;
+        }
+        return offsets;
+    },
+
+    buildControlAnalysis() {
+        if (!this.state.matrix || !this.state.bitstreamData || !this.state.blocks) return null;
+
+        const size = this.state.matrix.length;
+        const version = this.state.version;
+        const eccLevel = this.state.eccLevel;
+        const cs = this.state.controlState;
+        const paddingInfo = this.identifyPaddingBytes();
+        const messageByteCount = paddingInfo ? paddingInfo.startByteIndex : this.state.bitstreamData.dataBytes.length;
+        const { moduleToInterleavedBit, eccModuleMap, interleavedBitToBlock } =
+            buildGJMaps(version, eccLevel, this.state.bitstreamData.dataBytes.length);
+        const blockOffsets = this.getBlockOffsets();
+
+        const paddingCodewordsByBlock = new Map();
+        this.state.blocks.forEach((block, blockIdx) => {
+            let count = 0;
+            for (let i = 0; i < block.data.length; i++) {
+                const seqIdx = blockOffsets[blockIdx] + i;
+                if (seqIdx >= messageByteCount) count++;
+            }
+            paddingCodewordsByBlock.set(blockIdx, count);
+        });
+
+        const codewordForCell = new Map();
+        for (const [cellKey, interleavedBit] of moduleToInterleavedBit) {
+            const bInfo = interleavedBitToBlock[interleavedBit];
+            if (!bInfo) continue;
+            const seqByteIdx = blockOffsets[bInfo.blockIdx] + (bInfo.bitInBlock >>> 3);
+            codewordForCell.set(cellKey, {
+                blockIdx: bInfo.blockIdx,
+                bitInBlock: bInfo.bitInBlock,
+                seqByteIdx,
+                isPadding: seqByteIdx >= messageByteCount,
+                codewordKey: `${bInfo.blockIdx}:D:${bInfo.bitInBlock >>> 3}`
+            });
+        }
+
+        const regionCells = this.getControlRegionCells();
+        const targets = this.collectControlTargets();
+        const classifications = new Map();
+        const counts = {
+            function: 0,
+            locked: 0,
+            padding: 0,
+            eccSolvable: 0,
+            eccLocked: 0,
+            dataDamageable: 0,
+            dataLocked: 0,
+            naturalMatches: 0,
+            targetCount: targets.size
+        };
+        const dataErrorCodewordsByBlock = new Map();
+
+        const classifyCell = (cellKey) => {
+            const [row, col] = cellKey.split(',').map(Number);
+            if (isFunctionModule(row, col, size, version)) return 'function';
+            if (cs.lockedModules.has(cellKey)) return 'locked';
+
+            const dataInfo = codewordForCell.get(cellKey);
+            if (dataInfo) {
+                if (dataInfo.isPadding) return 'padding';
+
+                const wantsDark = targets.get(cellKey);
+                if (wantsDark !== undefined && Boolean(this.state.matrix[row][col]) === wantsDark) {
+                    return 'data-locked';
+                }
+                const allow = cs.allowDataOverwrite && this.getControlPresetBudget(this.state.blocks[dataInfo.blockIdx].eccCount) > 0;
+                return allow ? 'data-damageable' : 'data-locked';
+            }
+
+            const eccInfo = eccModuleMap.get(cellKey);
+            if (eccInfo) {
+                return (paddingCodewordsByBlock.get(eccInfo.blockIdx) || 0) > 0 ? 'ecc-solvable' : 'ecc-locked';
+            }
+
+            return 'locked';
+        };
+
+        regionCells.forEach(cellKey => {
+            const cls = classifyCell(cellKey);
+            classifications.set(cellKey, cls);
+            if (cls === 'function') counts.function++;
+            else if (cls === 'locked') counts.locked++;
+            else if (cls === 'padding') counts.padding++;
+            else if (cls === 'ecc-solvable') counts.eccSolvable++;
+            else if (cls === 'ecc-locked') counts.eccLocked++;
+            else if (cls === 'data-damageable') counts.dataDamageable++;
+            else if (cls === 'data-locked') counts.dataLocked++;
+        });
+
+        targets.forEach((wantsDark, cellKey) => {
+            const [row, col] = cellKey.split(',').map(Number);
+            if (Boolean(this.state.matrix[row][col]) === wantsDark) counts.naturalMatches++;
+            const cls = classifications.get(cellKey) || classifyCell(cellKey);
+            if (cls === 'data-damageable') {
+                const dataInfo = codewordForCell.get(cellKey);
+                if (!dataInfo) return;
+                if (!dataErrorCodewordsByBlock.has(dataInfo.blockIdx)) dataErrorCodewordsByBlock.set(dataInfo.blockIdx, new Set());
+                dataErrorCodewordsByBlock.get(dataInfo.blockIdx).add(dataInfo.codewordKey);
+            }
+        });
+
+        const blockUsage = this.state.blocks.map((block, blockIdx) => {
+            const used = dataErrorCodewordsByBlock.get(blockIdx)?.size || 0;
+            const budget = this.getControlPresetBudget(block.eccCount);
+            return {
+                blockIdx,
+                paddingCodewords: paddingCodewordsByBlock.get(blockIdx) || 0,
+                usedDataErrors: used,
+                budget,
+                maxErrors: Math.floor(block.eccCount / 2),
+                overBudget: used > budget
+            };
+        });
+
+        return {
+            classifications,
+            counts,
+            targets,
+            regionCells,
+            blockUsage,
+            maps: { moduleToInterleavedBit, eccModuleMap, interleavedBitToBlock, codewordForCell },
+            messageByteCount
+        };
+    },
+
+    runControlAnalysis(updateUi = true) {
+        const analysis = this.buildControlAnalysis();
+        this.state.controlState.lastAnalysis = analysis;
+        if (updateUi) this.updateControlSummary();
+        return analysis;
+    },
+
+    updateControlSummary(message = null, isError = false) {
+        const el = document.getElementById('controlAnalysisResult');
+        if (!el) return;
+        const analysis = this.state.controlState.lastAnalysis;
+        const solve = this.state.controlState.lastSolveSummary;
+
+        if (message) {
+            el.textContent = message;
+            el.style.color = isError ? '#ef4444' : '#374151';
+            el.style.display = 'block';
+            return;
+        }
+
+        if (!analysis) {
+            el.style.display = 'none';
+            return;
+        }
+
+        const c = analysis.counts;
+        const over = analysis.blockUsage.filter(b => b.overBudget).length;
+        const parts = [
+            `${c.targetCount} targets`,
+            `${c.padding} padding`,
+            `${c.eccSolvable} ECC solvable`,
+            `${c.eccLocked} ECC locked`,
+            `${c.dataDamageable} data damageable`
+        ];
+        if (over) parts.push(`${over} block${over === 1 ? '' : 's'} over budget`);
+        if (solve) parts.push(solve.status);
+
+        el.textContent = parts.join(' | ');
+        el.style.color = over ? '#b45309' : '#374151';
+        el.style.display = 'block';
+    },
+
     // Identify which bytes in the bitstream are padding bytes
     identifyPaddingBytes() {
         const bitstreamData = this.state.bitstreamData;
         if (!bitstreamData) return null;
 
         // Calculate total message bits (everything before padding)
-        const messageBits = bitstreamData.modeIndicator.length +
+        const messageBits = (bitstreamData.eciHeader || '').length +
+                           bitstreamData.modeIndicator.length +
                            bitstreamData.charCount.length +
                            bitstreamData.messageData.length +
                            bitstreamData.terminator.length +
@@ -1412,6 +1913,219 @@ const App = {
         return desiredValues;
     },
 
+    collectControlTargets() {
+        const targets = new Map();
+        if (!this.state.matrix) return targets;
+
+        const regionCells = this.getControlRegionCells();
+        if (QRRenderer.state.logoImg && QRRenderer.state.logoImageData) {
+            const size = this.state.matrix.length;
+            const quietZone = QRRenderer.state.quietZone;
+            const canvasSize = 450;
+            const totalSize = size + quietZone * 2;
+            const moduleSize = canvasSize / totalSize;
+            const qrAreaSize = size * moduleSize;
+            const logoTargets = this.getDesiredLogoColors(moduleSize, qrAreaSize, size);
+            logoTargets.forEach((isDark, cellKey) => {
+                if (regionCells.has(cellKey)) targets.set(cellKey, isDark);
+            });
+        }
+
+        this.state.controlState.manualTargets.forEach((isDark, cellKey) => {
+            if (regionCells.has(cellKey)) targets.set(cellKey, isDark);
+        });
+
+        this.state.controlState.lockedModules.forEach(cellKey => {
+            targets.delete(cellKey);
+        });
+
+        return targets;
+    },
+
+    regenerateMatrixFromDataBytes(dataBytes, maskPattern) {
+        const size = this.state.matrix.length;
+        const blocks = splitIntoBlocks(dataBytes, this.state.version, this.state.eccLevel, blockSizeTable);
+        calculateEccForBlocks(blocks);
+        const interleaved = interleaveBlocks(blocks);
+        const matrix = createMatrix(size);
+        placeFunctionPatterns(matrix, this.state.version);
+        placeDataBits(matrix, interleaved);
+        applyMask(matrix, maskPattern, this.state.version);
+        placeFormatInfo(matrix, this.state.eccLevel, maskPattern, this.state.version);
+        placeVersionInfo(matrix, this.state.version);
+        return { matrix, blocks };
+    },
+
+    applyControlSolve() {
+        if (!this.state.matrix || !this.state.bitstreamData) {
+            return { success: false, message: 'Generate a QR code first.' };
+        }
+
+        const analysis = this.runControlAnalysis(false);
+        if (!analysis || analysis.targets.size === 0) {
+            return { success: false, message: 'No control targets to solve.' };
+        }
+
+        const overBudget = analysis.blockUsage.filter(b => b.overBudget);
+        if (overBudget.length > 0) {
+            return {
+                success: false,
+                message: `Data overwrite budget exceeded in ${overBudget.length} block${overBudget.length === 1 ? '' : 's'}. Use Auto-fit region or a stronger preset.`
+            };
+        }
+
+        const paddingTargets = new Map();
+        const eccTargets = new Map();
+        const dataVisualTargets = new Map();
+        const lockedDataTargets = new Map();
+        let lockedOrUnsolvable = 0;
+
+        this.state.controlState.lockedModules.forEach(cellKey => {
+            if (!analysis.maps.moduleToInterleavedBit.has(cellKey)) return;
+            const [row, col] = cellKey.split(',').map(Number);
+            lockedDataTargets.set(cellKey, Boolean(this.state.matrix[row][col]));
+        });
+
+        analysis.targets.forEach((isDark, cellKey) => {
+            const cls = analysis.classifications.get(cellKey);
+            if (cls === 'padding') paddingTargets.set(cellKey, isDark);
+            else if (cls === 'ecc-solvable') eccTargets.set(cellKey, isDark);
+            else if (cls === 'data-damageable') dataVisualTargets.set(cellKey, isDark);
+            else {
+                const [row, col] = cellKey.split(',').map(Number);
+                if (Boolean(this.state.matrix[row][col]) !== isDark) lockedOrUnsolvable++;
+            }
+        });
+
+        const solvedDataBytes = gjSolveModuleBits({
+            dataBytes: [...this.state.bitstreamData.dataBytes],
+            version: this.state.version,
+            eccLevel: this.state.eccLevel,
+            maskPattern: this.state.maskPattern,
+            messageByteCount: analysis.messageByteCount,
+            targets: paddingTargets,
+            moduleToInterleavedBit: analysis.maps.moduleToInterleavedBit,
+            interleavedBitToBlock: analysis.maps.interleavedBitToBlock,
+            lockedDataTargets,
+            eccTargets,
+            eccModuleMap: analysis.maps.eccModuleMap
+        });
+
+        const regen = this.regenerateMatrixFromDataBytes(solvedDataBytes, this.state.maskPattern);
+        let newMatrix = regen.matrix;
+
+        let dataErrorCodewords = 0;
+        const damagedByBlock = new Map();
+        dataVisualTargets.forEach((isDark, cellKey) => {
+            const [row, col] = cellKey.split(',').map(Number);
+            if (Boolean(newMatrix[row][col]) === isDark) return;
+            const info = analysis.maps.codewordForCell.get(cellKey);
+            if (!info) return;
+            if (!damagedByBlock.has(info.blockIdx)) damagedByBlock.set(info.blockIdx, new Set());
+            damagedByBlock.get(info.blockIdx).add(info.codewordKey);
+            newMatrix[row][col] = isDark;
+        });
+        damagedByBlock.forEach(set => { dataErrorCodewords += set.size; });
+
+        this.state.bitstreamData.dataBytes = solvedDataBytes;
+        const paddingInfo = this.identifyPaddingBytes();
+        if (paddingInfo) {
+            this.state.bitstreamData.padBytes = solvedDataBytes.slice(
+                paddingInfo.startByteIndex,
+                paddingInfo.endByteIndex
+            );
+            this.state.originalPaddingBytes = [...this.state.bitstreamData.padBytes];
+        }
+        this.state.blocks = regen.blocks;
+        this.state.matrix = newMatrix;
+
+        this.buildPaddingModuleMap();
+        this.state.deleteState.codewordMap = null;
+        this.state.deleteState.reverseMap = null;
+
+        let matched = 0;
+        analysis.targets.forEach((isDark, cellKey) => {
+            const [row, col] = cellKey.split(',').map(Number);
+            if (Boolean(newMatrix[row][col]) === isDark) matched++;
+        });
+        const total = analysis.targets.size;
+        const status = lockedOrUnsolvable > 0 || matched < total
+            ? 'Partial'
+            : (dataErrorCodewords > 0 ? 'Solved with data errors' : 'Solved');
+        const summary = {
+            status,
+            matched,
+            total,
+            lockedOrUnsolvable,
+            dataErrorCodewords,
+            eccTargets: eccTargets.size,
+            paddingTargets: paddingTargets.size
+        };
+        this.state.controlState.lastSolveSummary = summary;
+        this.state.controlState.lastAnalysis = this.buildControlAnalysis();
+
+        return {
+            success: true,
+            message: `${status}: ${matched}/${total} targets matched` +
+                (dataErrorCodewords ? `, ${dataErrorCodewords} data codeword error${dataErrorCodewords === 1 ? '' : 's'}` : '') +
+                (lockedOrUnsolvable ? `, ${lockedOrUnsolvable} locked/unsolved` : '')
+        };
+    },
+
+    commitControlEditsBeforeLeavingStep2() {
+        const analysis = this.runControlAnalysis(false);
+        if (!analysis || analysis.targets.size === 0) {
+            return true;
+        }
+
+        const result = this.applyControlSolve();
+        this.updateControlSummary(result.message, !result.success);
+        this.renderLogoCanvas();
+
+        if (!result.success) {
+            alert(result.message);
+            return false;
+        }
+
+        return true;
+    },
+
+    autoFitControlRegion() {
+        if (!this.state.matrix || !this.state.controlState.regions.length) return;
+
+        const size = this.state.matrix.length;
+        const current = this.state.controlState.regions[0];
+        const centerX = current.x + Math.floor(current.width / 2);
+        const centerY = current.y + Math.floor(current.height / 2);
+        let best = { region: current, score: -Infinity };
+        const maxSide = Math.max(current.width, current.height);
+
+        for (let side = maxSide; side >= 5; side--) {
+            const x = Math.max(0, Math.min(size - side, centerX - Math.floor(side / 2)));
+            const y = Math.max(0, Math.min(size - side, centerY - Math.floor(side / 2)));
+            const region = { x, y, width: side, height: side };
+            const saved = this.state.controlState.regions;
+            this.state.controlState.regions = [region];
+            const analysis = this.buildControlAnalysis();
+            this.state.controlState.regions = saved;
+            if (!analysis) continue;
+
+            const c = analysis.counts;
+            const over = analysis.blockUsage.filter(b => b.overBudget).length;
+            const locked = c.function + c.locked + c.eccLocked + c.dataLocked;
+            const controllable = c.padding + c.eccSolvable + c.dataDamageable;
+            const area = side * side;
+            const score = area * 4 + controllable * 6 - locked * 8 - over * 1000;
+            if (score > best.score) best = { region, score };
+            if (over === 0 && locked / Math.max(1, area) < 0.35) {
+                best = { region, score };
+                break;
+            }
+        }
+
+        this.state.controlState.regions = [best.region];
+    },
+
     // Apply logo blend to padding - modifies actual padding bytes
     applyLogoBlendToPadding() {
         if (!QRRenderer.state.logoImg || !QRRenderer.state.logoImageData) {
@@ -1645,6 +2359,46 @@ const App = {
 
     // ========== PAINT MODE ==========
 
+    setupControlWorkflowControls() {
+        const preset = document.getElementById('qualityPreset');
+        const allow = document.getElementById('allowDataOverwrite');
+        const analyze = document.getElementById('analyzeControlBtn');
+        const solve = document.getElementById('applyControlSolveBtn');
+        const fit = document.getElementById('autoFitRegionBtn');
+        if (!preset || !allow || !analyze || !solve || !fit) return;
+
+        preset.addEventListener('change', (e) => {
+            this.state.controlState.qualityPreset = e.target.value;
+            this.state.controlState.allowDataOverwrite = e.target.value !== 'intact';
+            allow.checked = this.state.controlState.allowDataOverwrite;
+            this.runControlAnalysis(true);
+            this.renderLogoCanvas();
+        });
+
+        allow.addEventListener('change', (e) => {
+            this.state.controlState.allowDataOverwrite = e.target.checked;
+            this.runControlAnalysis(true);
+            this.renderLogoCanvas();
+        });
+
+        analyze.addEventListener('click', () => {
+            this.runControlAnalysis(true);
+            this.renderLogoCanvas();
+        });
+
+        solve.addEventListener('click', () => {
+            const result = this.applyControlSolve();
+            this.updateControlSummary(result.message, !result.success);
+            this.renderLogoCanvas();
+        });
+
+        fit.addEventListener('click', () => {
+            this.autoFitControlRegion();
+            this.runControlAnalysis(true);
+            this.renderLogoCanvas();
+        });
+    },
+
     // Setup paint mode controls and event handlers
     setupPaintMode() {
         const canvas = document.getElementById('logoCanvas');
@@ -1667,11 +2421,17 @@ const App = {
                 // Update mode hint
                 const modeHint = document.getElementById('modeHint');
                 if (modeHint) {
-                    modeHint.textContent = mode === 'paint' ? 'Click to paint, Shift+drag to fill area' : 'Drag to move logo';
+                    const hints = {
+                        paint: 'Click to paint targets, Shift+drag to fill area',
+                        lock: 'Click to lock/unlock modules, Shift+drag to lock area',
+                        region: 'Shift+drag to set the control region',
+                        logo: 'Drag to move logo'
+                    };
+                    modeHint.textContent = hints[mode] || '';
                 }
 
                 // Toggle canvas CSS class
-                canvas.classList.toggle('paint-mode', mode === 'paint');
+                canvas.classList.toggle('paint-mode', mode === 'paint' || mode === 'lock' || mode === 'region');
                 canvas.classList.toggle('draggable', mode === 'logo' && !!QRRenderer.state.logoImg);
 
                 this.renderLogoCanvas();
@@ -1690,13 +2450,15 @@ const App = {
         // Reset button
         document.getElementById('resetPaintBtn').addEventListener('click', () => {
             this.state.paddingEdits = new Map();
-            this.updateQRFromPaddingEdits();
+            this.state.controlState.manualTargets = new Map();
+            this.state.controlState.lastSolveSummary = null;
+            this.runControlAnalysis(true);
             this.renderLogoCanvas();
         });
 
         // Canvas paint event handlers
         canvas.addEventListener('mousemove', (e) => {
-            if (this.state.interactionMode !== 'paint') return;
+            if (!['paint', 'lock', 'region'].includes(this.state.interactionMode)) return;
             if (this.state.isBoxSelecting) {
                 const cell = this.canvasEventToCell(e);
                 if (cell) {
@@ -1720,7 +2482,8 @@ const App = {
                 this.renderLogoCanvas();
             } else if (this.state.isPaintingModule) {
                 this.state.isPaintingModule = false;
-                this.schedulePaintUpdate();
+                this.runControlAnalysis(false);
+                this.renderLogoCanvas();
             }
         });
 
@@ -1733,7 +2496,8 @@ const App = {
                 this.renderLogoCanvas();
             } else if (this.state.isPaintingModule) {
                 this.state.isPaintingModule = false;
-                this.schedulePaintUpdate();
+                this.runControlAnalysis(false);
+                this.renderLogoCanvas();
             }
             if (this.state.lastHighlightCell !== null) {
                 this.state.lastHighlightCell = null;
@@ -1743,7 +2507,7 @@ const App = {
 
         // Touch equivalents on canvas
         canvas.addEventListener('touchmove', (e) => {
-            if (this.state.interactionMode !== 'paint') return;
+            if (!['paint', 'lock', 'region'].includes(this.state.interactionMode)) return;
             if (this.state.isPaintingModule) {
                 this.paintModuleAt(e.touches[0]);
                 e.preventDefault();
@@ -1753,7 +2517,8 @@ const App = {
         canvas.addEventListener('touchend', () => {
             if (this.state.isPaintingModule) {
                 this.state.isPaintingModule = false;
-                this.schedulePaintUpdate();
+                this.runControlAnalysis(false);
+                this.renderLogoCanvas();
             }
         });
     },
@@ -1784,7 +2549,7 @@ const App = {
     handlePaintStart(e) {
         if (!this.state.matrix) return;
 
-        if (e.shiftKey) {
+        if (e.shiftKey || this.state.interactionMode === 'region') {
             // Start box selection
             const cell = this.canvasEventToCell(e);
             if (cell) {
@@ -1805,12 +2570,30 @@ const App = {
         if (!cell) return;
 
         const cellKey = `${cell.row},${cell.col}`;
-        if (!this.state.editableCells.has(cellKey)) return;
+        const size = this.state.matrix.length;
+
+        if (this.state.interactionMode === 'lock') {
+            if (isFunctionModule(cell.row, cell.col, size, this.state.version)) return;
+            if (this.state.controlState.lockedModules.has(cellKey)) {
+                this.state.controlState.lockedModules.delete(cellKey);
+            } else {
+                this.state.controlState.lockedModules.add(cellKey);
+                this.state.controlState.manualTargets.delete(cellKey);
+            }
+            this.runControlAnalysis(false);
+            this.renderLogoCanvas();
+            return;
+        }
+
+        const analysis = this.state.controlState.lastAnalysis || this.runControlAnalysis(false);
+        const cls = analysis?.classifications?.get(cellKey);
+        if (!['padding', 'ecc-solvable', 'data-damageable'].includes(cls)) return;
 
         const wantDark = this.state.brushMode === 'black';
-        this.state.paddingEdits.set(cellKey, wantDark);
+        this.state.controlState.manualTargets.set(cellKey, wantDark);
 
         // Immediate visual feedback: re-render
+        this.runControlAnalysis(false);
         this.renderLogoCanvas();
     },
 
@@ -1824,7 +2607,7 @@ const App = {
 
         this.renderLogoCanvas();
 
-        if (cell && this.state.editableCells.has(cellKey)) {
+        if (cell) {
             const canvas = document.getElementById('logoCanvas');
             const size = this.state.matrix.length;
             QRRenderer.drawCellHighlight(canvas, cell.row, cell.col, size, QRRenderer.state.quietZone);
@@ -1876,21 +2659,43 @@ const App = {
         const minCol = Math.min(start.col, end.col);
         const maxCol = Math.max(start.col, end.col);
 
+        if (this.state.interactionMode === 'region') {
+            this.state.controlState.regions = [{
+                x: minCol,
+                y: minRow,
+                width: maxCol - minCol + 1,
+                height: maxRow - minRow + 1
+            }];
+            this.runControlAnalysis(false);
+            return;
+        }
+
         const wantDark = this.state.brushMode === 'black';
         let editCount = 0;
 
         for (let row = minRow; row <= maxRow; row++) {
             for (let col = minCol; col <= maxCol; col++) {
                 const cellKey = `${row},${col}`;
-                if (this.state.editableCells.has(cellKey)) {
-                    this.state.paddingEdits.set(cellKey, wantDark);
+                if (this.state.interactionMode === 'lock') {
+                    if (!isFunctionModule(row, col, this.state.matrix.length, this.state.version)) {
+                        this.state.controlState.lockedModules.add(cellKey);
+                        this.state.controlState.manualTargets.delete(cellKey);
+                        editCount++;
+                    }
+                    continue;
+                }
+
+                const analysis = this.state.controlState.lastAnalysis || this.runControlAnalysis(false);
+                const cls = analysis?.classifications?.get(cellKey);
+                if (['padding', 'ecc-solvable', 'data-damageable'].includes(cls)) {
+                    this.state.controlState.manualTargets.set(cellKey, wantDark);
                     editCount++;
                 }
             }
         }
 
         if (editCount > 0) {
-            this.schedulePaintUpdate();
+            this.runControlAnalysis(false);
         }
     },
 
@@ -1953,7 +2758,7 @@ const App = {
     updatePaintControlsVisibility() {
         const controls = document.getElementById('paintModeControls');
         if (!controls) return;
-        controls.style.display = this.state.editableCells.size > 0 ? 'flex' : 'none';
+        controls.style.display = this.state.matrix ? 'flex' : 'none';
     },
 
     // Reset paint mode UI to logo mode
@@ -1985,6 +2790,11 @@ const App = {
         if (moveLogoBtn) {
             moveLogoBtn.disabled = !QRRenderer.state.logoImg;
         }
+
+        const preset = document.getElementById('qualityPreset');
+        const allow = document.getElementById('allowDataOverwrite');
+        if (preset) preset.value = this.state.controlState.qualityPreset;
+        if (allow) allow.checked = this.state.controlState.allowDataOverwrite;
 
         this.updatePaintControlsVisibility();
     },
@@ -2791,6 +3601,14 @@ const App = {
             deletedCodewords: Array.from(this.state.deleteState.deletedCodewords),
             deletedModuleEdits: Array.from(this.state.deleteState.deletedModuleEdits.entries()),
             hiddenModules: Array.from(this.state.deleteState.hiddenModules),
+            control: {
+                regions: this.state.controlState.regions,
+                manualTargets: Array.from(this.state.controlState.manualTargets.entries()),
+                lockedModules: Array.from(this.state.controlState.lockedModules),
+                qualityPreset: this.state.controlState.qualityPreset,
+                allowDataOverwrite: this.state.controlState.allowDataOverwrite,
+                lastSolveSummary: this.state.controlState.lastSolveSummary
+            },
             maskPattern: this.state.maskPattern,
             padBytes: this.state.bitstreamData ? [...this.state.bitstreamData.padBytes] : null
         };
@@ -2934,6 +3752,21 @@ const App = {
             // (e) Generate QR
             this.generateQR();
 
+            if (data.control) {
+                this.state.controlState.regions = Array.isArray(data.control.regions) ? data.control.regions : this.state.controlState.regions;
+                this.state.controlState.manualTargets = new Map(data.control.manualTargets || []);
+                this.state.controlState.lockedModules = new Set(data.control.lockedModules || []);
+                this.state.controlState.qualityPreset = data.control.qualityPreset || 'intact';
+                this.state.controlState.allowDataOverwrite = !!data.control.allowDataOverwrite;
+                this.state.controlState.lastSolveSummary = data.control.lastSolveSummary || null;
+                this.state.controlState.defaultRegionInitialized = true;
+                const presetEl = document.getElementById('qualityPreset');
+                const allowEl = document.getElementById('allowDataOverwrite');
+                if (presetEl) presetEl.value = this.state.controlState.qualityPreset;
+                if (allowEl) allowEl.checked = this.state.controlState.allowDataOverwrite;
+                this.runControlAnalysis(true);
+            }
+
             // Restore padding modifications and mask pattern if saved
             if (data.padBytes && data.padBytes.length > 0 && this.state.bitstreamData) {
                 const paddingInfo = this.identifyPaddingBytes();
@@ -3034,60 +3867,16 @@ const App = {
             rs.colorMode = 'simple';
             document.getElementById('simpleColorMode').style.display = 'block';
             document.getElementById('moduleColorMode').style.display = 'none';
+            document.getElementById('optimizeMaskSection').style.display = 'block';
             finishRestore();
         }
     },
 
     // Optimize mask pattern for best logo match (including padding modification)
     optimizeMaskForLogo() {
-        if (!QRRenderer.state.logoImg) {
-            return;
-        }
-
-        // Bake in any pending paint edits so optimization starts from current state
-        if (this.state.paddingEdits.size > 0) {
-            this.updateQRFromPaddingEdits();
-        }
-
-        const resultEl = document.getElementById('optimizeResult');
-        resultEl.textContent = 'Testing mask patterns and optimizing padding...';
-        resultEl.style.display = 'block';
-
-        // Small delay to allow UI to update
-        setTimeout(() => {
-            const result = this.state.smartEccMode
-                ? this.applyLogoBlendAdvanced()
-                : this.applyLogoBlendToPadding();
-
-            if (!result.success) {
-                resultEl.textContent = result.message;
-                resultEl.style.color = '#6b7280';
-                return;
-            }
-
-            // Show result
-            if (result.eccTargets !== undefined) {
-                resultEl.innerHTML = `<strong>Optimized!</strong> Using mask ${result.bestMask} — ${result.matches}/${result.total} logo modules matched (${result.percentage}%), ${result.eccTargets} ECC modules targeted`;
-            } else {
-                resultEl.innerHTML = `<strong>Optimized!</strong> Using mask ${result.bestMask} - ${result.matches}/${result.total} modules match logo (${result.percentage}%)`;
-            }
-            resultEl.style.color = '#10b981';
-
-            // Clear manual edits (optimization replaces them) and rebuild map
-            this.state.paddingEdits = new Map();
-            this.buildPaddingModuleMap();
-
-            // Clear delete state since matrix changed
-            this.state.deleteState.deletedCodewords = new Set();
-            this.state.deleteState.deletedModuleEdits = new Map();
-            this.state.deleteState.hiddenModules = new Set();
-            this.state.deleteState.codewordMap = null;
-            this.state.deleteState.reverseMap = null;
-            this.updatePaintControlsVisibility();
-
-            // Re-render
-            this.renderLogoCanvas();
-        }, 50);
+        const result = this.applyControlSolve();
+        this.updateControlSummary(result.message, !result.success);
+        this.renderLogoCanvas();
     }
 };
 

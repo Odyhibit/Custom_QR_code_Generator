@@ -274,6 +274,8 @@ function buildGJMaps(version, eccLevel, numDataBytes) {
 //   messageByteCount      — number of leading sequential data bytes that must
 //                           not be modified (0 = no locking)
 //   targets               — Map<"row,col", bool> for DATA module positions
+//   lockedDataTargets     — optional Map<"row,col", bool> data module values
+//                           to preserve before steering ECC
 //   moduleToInterleavedBit— Map<"row,col", interleavedBitIndex> (data only)
 //   interleavedBitToBlock — Array of { blockIdx, bitInBlock }
 //   eccTargets            — optional Map<"row,col", bool> for ECC modules
@@ -289,6 +291,7 @@ function gjSolveModuleBits({
     targets,
     moduleToInterleavedBit,
     interleavedBitToBlock,
+    lockedDataTargets = null,
     eccTargets = null,
     eccModuleMap = null
 }) {
@@ -327,7 +330,23 @@ function gjSolveModuleBits({
         }
     }
 
-    // 2. ECC targets — processed before padding targets to give them priority.
+    // 2. Explicit locked data modules, such as user-locked padding cells.
+    if (lockedDataTargets) {
+        for (const [cellKey, isDark] of lockedDataTargets) {
+            const ib = moduleToInterleavedBit.get(cellKey);
+            if (ib === undefined || ib >= interleavedBitToBlock.length) continue;
+
+            const blockInfo = interleavedBitToBlock[ib];
+            if (blockInfo.blockIdx >= solvers.length) continue;
+
+            const [row, col] = cellKey.split(',').map(Number);
+            const flipped = shouldFlipModule(row, col, maskPattern);
+            const rawBit = (isDark ^ flipped) ? 1 : 0;
+            solvers[blockInfo.blockIdx].canSet(blockInfo.bitInBlock, rawBit);
+        }
+    }
+
+    // 3. ECC targets — processed before padding targets to give them priority.
     if (eccTargets && eccModuleMap) {
         for (const [cellKey, isDark] of eccTargets) {
             const eccInfo = eccModuleMap.get(cellKey);
@@ -343,7 +362,7 @@ function gjSolveModuleBits({
         }
     }
 
-    // 3. Data / padding targets.
+    // 4. Data / padding targets.
     for (const [cellKey, isDark] of targets) {
         const ib = moduleToInterleavedBit.get(cellKey);
         if (ib === undefined || ib >= interleavedBitToBlock.length) continue;

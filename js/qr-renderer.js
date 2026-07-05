@@ -7,6 +7,16 @@ const QRRenderer = {
         logoImage: null,
         logoImg: null,
         logoImageData: null,
+        originalLogoImg: null,
+        originalLogoImageData: null,
+        logoPrep: {
+            backgroundMode: 'none', // 'none', 'white', 'black'
+            tolerance: 32,
+            fillHoles: true,
+            outlineEnabled: true,
+            outlineColor: '#ffffff',
+            outlineWidth: 3
+        },
         logoX: 50, // percentage position
         logoY: 50,
         logoScale: 100,
@@ -26,7 +36,14 @@ const QRRenderer = {
         finderFullSeparator: false,
         // Simple 2-color mode (no logo)
         simpleDarkColor: '#000000',
-        simpleLightColor: '#ffffff'
+        simpleLightColor: '#ffffff',
+        // Layer blending (logo only)
+        layers: {
+            enabled: false,
+            bottomShape: 'square',
+            bottomSize: 100,
+            bottomColor: '#000000'
+        }
     },
 
     /**
@@ -37,27 +54,31 @@ const QRRenderer = {
         reader.onload = (e) => {
             const img = new Image();
             img.onload = () => {
-                this.state.logoImage = e.target.result;
-                this.state.logoImg = img;
-
-                // Create ImageData for sampling
+                // Store original image for re-processing on prep changes
+                this.state.originalLogoImg = img;
                 const tempCanvas = document.createElement('canvas');
                 const tempCtx = tempCanvas.getContext('2d');
                 tempCanvas.width = img.width;
                 tempCanvas.height = img.height;
                 tempCtx.drawImage(img, 0, 0);
-                this.state.logoImageData = tempCtx.getImageData(0, 0, img.width, img.height);
+                this.state.originalLogoImageData = tempCtx.getImageData(0, 0, img.width, img.height);
 
-                // Extract colors for palette mode
-                const colors = ColorUtils.extractDominantColors(img);
-                this.state.darkPalette = colors.darkPalette;
-                this.state.lightPalette = colors.lightPalette;
+                // Reset prep to defaults, using size-aware outline width
+                this.state.logoPrep = {
+                    backgroundMode: 'none',
+                    tolerance: 32,
+                    fillHoles: true,
+                    outlineEnabled: true,
+                    outlineColor: '#ffffff',
+                    outlineWidth: this.getDefaultOutlineWidth()
+                };
 
                 // Reset position to center
                 this.state.logoX = 50;
                 this.state.logoY = 50;
 
-                if (callback) callback();
+                // Apply prep pipeline (initially passes through unchanged)
+                this.applyLogoPrep(callback);
             };
             img.src = e.target.result;
         };
@@ -71,11 +92,212 @@ const QRRenderer = {
         this.state.logoImage = null;
         this.state.logoImg = null;
         this.state.logoImageData = null;
+        this.state.originalLogoImg = null;
+        this.state.originalLogoImageData = null;
+        this.state.logoPrep = {
+            backgroundMode: 'none',
+            tolerance: 32,
+            fillHoles: true,
+            outlineEnabled: true,
+            outlineColor: '#ffffff',
+            outlineWidth: 3
+        };
         this.state.logoX = 50;
         this.state.logoY = 50;
         this.state.darkPalette = ['#000000', '#333333', '#1a1a1a', '#0d0d0d'];
         this.state.lightPalette = ['#ffffff', '#f0f0f0', '#e0e0e0', '#d0d0d0'];
         this.state.backgroundFill = 'light';
+    },
+
+    // ========== LOGO PREP ==========
+
+    hexToRgb(hex) {
+        const clean = hex.replace('#', '');
+        return {
+            r: parseInt(clean.slice(0, 2), 16),
+            g: parseInt(clean.slice(2, 4), 16),
+            b: parseInt(clean.slice(4, 6), 16)
+        };
+    },
+
+    getDefaultOutlineWidth() {
+        const source = this.state.originalLogoImageData;
+        if (!source) return 3;
+        const sourceLongSide = Math.max(source.width, source.height);
+        const scale = Math.max(0.01, this.state.logoScale / 100);
+
+        // Scale to ~1 module worth of coverage so the outline reliably shows through
+        const matrixSize = (typeof App !== 'undefined' && App.state && App.state.matrix)
+            ? App.state.matrix.length : 0;
+
+        if (matrixSize > 0) {
+            return Math.max(1, Math.round(sourceLongSide / (matrixSize * scale)));
+        }
+        // Fallback: assume typical 25-module QR
+        return Math.max(1, Math.round(sourceLongSide / 25));
+    },
+
+    buildOutsideTransparentMask(opaque, width, height) {
+        const outside = new Uint8Array(width * height);
+        const queue = [];
+
+        const enqueue = (x, y) => {
+            if (x < 0 || y < 0 || x >= width || y >= height) return;
+            const index = y * width + x;
+            if (opaque[index] || outside[index]) return;
+            outside[index] = 1;
+            queue.push(index);
+        };
+
+        for (let x = 0; x < width; x++) {
+            enqueue(x, 0);
+            enqueue(x, height - 1);
+        }
+        for (let y = 1; y < height - 1; y++) {
+            enqueue(0, y);
+            enqueue(width - 1, y);
+        }
+
+        for (let i = 0; i < queue.length; i++) {
+            const index = queue[i];
+            const x = index % width;
+            const y = Math.floor(index / width);
+            enqueue(x + 1, y);
+            enqueue(x - 1, y);
+            enqueue(x, y + 1);
+            enqueue(x, y - 1);
+        }
+
+        return outside;
+    },
+
+    prepareLogoImageData(sourceImageData) {
+        const prep = this.state.logoPrep;
+        const sourceWidth = sourceImageData.width;
+        const sourceHeight = sourceImageData.height;
+        const outlineWidth = prep.outlineEnabled ? Math.max(0, parseInt(prep.outlineWidth) || 0) : 0;
+        const border = outlineWidth;
+        const width = sourceWidth + border * 2;
+        const height = sourceHeight + border * 2;
+        const data = new Uint8ClampedArray(width * height * 4);
+
+        // Copy source into bordered region
+        for (let y = 0; y < sourceHeight; y++) {
+            for (let x = 0; x < sourceWidth; x++) {
+                const si = (y * sourceWidth + x) * 4;
+                const ti = ((y + border) * width + (x + border)) * 4;
+                data[ti] = sourceImageData.data[si];
+                data[ti + 1] = sourceImageData.data[si + 1];
+                data[ti + 2] = sourceImageData.data[si + 2];
+                data[ti + 3] = sourceImageData.data[si + 3];
+            }
+        }
+
+        // Background removal
+        if (prep.backgroundMode !== 'none') {
+            const bg = prep.backgroundMode === 'white' ? { r: 255, g: 255, b: 255 } : { r: 0, g: 0, b: 0 };
+            const tol = Math.max(0, parseInt(prep.tolerance) || 0);
+            const feather = 32;
+            for (let i = 0; i < data.length; i += 4) {
+                if (data[i + 3] === 0) continue;
+                const dr = data[i] - bg.r;
+                const dg = data[i + 1] - bg.g;
+                const db = data[i + 2] - bg.b;
+                const dist = Math.sqrt(dr * dr + dg * dg + db * db);
+                if (dist <= tol) {
+                    data[i + 3] = 0;
+                } else if (dist <= tol + feather) {
+                    data[i + 3] = Math.round(data[i + 3] * (dist - tol) / feather);
+                }
+            }
+        }
+
+        // Build opaque mask
+        const outlineRgb = this.hexToRgb(prep.outlineColor || '#ffffff');
+        const opaque = new Uint8Array(width * height);
+        for (let index = 0; index < width * height; index++) {
+            opaque[index] = data[index * 4 + 3] >= 128 ? 1 : 0;
+        }
+
+        // Fill holes (transparent pixels enclosed by opaque ones)
+        if (prep.fillHoles) {
+            const outside = this.buildOutsideTransparentMask(opaque, width, height);
+            for (let index = 0; index < width * height; index++) {
+                if (!opaque[index] && !outside[index]) {
+                    const di = index * 4;
+                    data[di] = outlineRgb.r;
+                    data[di + 1] = outlineRgb.g;
+                    data[di + 2] = outlineRgb.b;
+                    data[di + 3] = 255;
+                    opaque[index] = 1;
+                }
+            }
+        }
+
+        // Draw outline around opaque pixels
+        const output = new Uint8ClampedArray(data);
+        if (outlineWidth > 0) {
+            const radiusSq = outlineWidth * outlineWidth;
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const index = y * width + x;
+                    if (opaque[index]) continue;
+
+                    let nearLogo = false;
+                    outer: for (let dy = -outlineWidth; dy <= outlineWidth; dy++) {
+                        const yy = y + dy;
+                        if (yy < 0 || yy >= height) continue;
+                        for (let dx = -outlineWidth; dx <= outlineWidth; dx++) {
+                            if (dx * dx + dy * dy > radiusSq) continue;
+                            const xx = x + dx;
+                            if (xx < 0 || xx >= width) continue;
+                            if (opaque[yy * width + xx]) { nearLogo = true; break outer; }
+                        }
+                    }
+
+                    if (nearLogo) {
+                        const di = index * 4;
+                        output[di] = outlineRgb.r;
+                        output[di + 1] = outlineRgb.g;
+                        output[di + 2] = outlineRgb.b;
+                        output[di + 3] = 255;
+                    }
+                }
+            }
+        }
+
+        return new ImageData(output, width, height);
+    },
+
+    applyLogoPrep(callback) {
+        if (!this.state.originalLogoImageData) {
+            if (callback) callback();
+            return;
+        }
+
+        const src = this.state.originalLogoImageData;
+        const cloned = new ImageData(new Uint8ClampedArray(src.data), src.width, src.height);
+        const preparedImageData = this.prepareLogoImageData(cloned);
+
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = preparedImageData.width;
+        canvas.height = preparedImageData.height;
+        ctx.putImageData(preparedImageData, 0, 0);
+
+        const img = new Image();
+        img.onload = () => {
+            this.state.logoImage = canvas.toDataURL('image/png');
+            this.state.logoImg = img;
+            this.state.logoImageData = preparedImageData;
+
+            const colors = ColorUtils.extractDominantColors(img);
+            this.state.darkPalette = colors.darkPalette;
+            this.state.lightPalette = colors.lightPalette;
+
+            if (callback) callback();
+        };
+        img.src = canvas.toDataURL('image/png');
     },
 
     /**
@@ -263,6 +485,24 @@ const QRRenderer = {
             Math.round(best.b / best.count),
             255
         ];
+    },
+
+    /**
+     * Sample the logo's alpha at a QR-area pixel coordinate (no offset).
+     * Returns 0–255; 0 if outside the logo bounds entirely.
+     */
+    sampleLogoAlpha(canvasX, canvasY, qrAreaSize) {
+        if (!this.state.logoImg || !this.state.logoImageData) return 0;
+        const bounds = this.getLogoBounds(qrAreaSize);
+        if (!bounds) return 0;
+
+        const lx = canvasX - bounds.x;
+        const ly = canvasY - bounds.y;
+        if (lx < 0 || lx >= bounds.width || ly < 0 || ly >= bounds.height) return 0;
+
+        const imgX = Math.min(this.state.logoImageData.width - 1, Math.floor((lx / bounds.width) * this.state.logoImageData.width));
+        const imgY = Math.min(this.state.logoImageData.height - 1, Math.floor((ly / bounds.height) * this.state.logoImageData.height));
+        return this.state.logoImageData.data[(imgY * this.state.logoImageData.width + imgX) * 4 + 3];
     },
 
     /**
@@ -558,6 +798,80 @@ const QRRenderer = {
     },
 
     /**
+     * Draw the bottom QR layer (dark modules only, under the logo)
+     * Plain version — no deletion state awareness, used in render().
+     * Skips any module whose center is inside the logo (alpha ≥ 128) — those
+     * belong exclusively to the top layer.
+     */
+    renderBottomLayer(ctx, matrix, offset, moduleSize, size) {
+        const layers = this.state.layers;
+        const sizeFraction = layers.bottomSize / 100;
+        const shape = layers.bottomShape;
+        const darkColor = layers.bottomColor || '#000000';
+        const lightColor = this.state.colorMode === 'simple'
+            ? this.state.simpleLightColor
+            : (this.state.lightPalette[0] || '#ffffff');
+        const qrAreaSize = size * moduleSize;
+
+        for (let row = 0; row < size; row++) {
+            for (let col = 0; col < size; col++) {
+                if (this.isFinderPattern(row, col, size)) continue;
+                if (this.isSeparator(row, col, size)) continue;
+
+                const cx = (col + 0.5) * moduleSize;
+                const cy = (row + 0.5) * moduleSize;
+                if (this.sampleLogoAlpha(cx, cy, qrAreaSize) >= 128) continue;
+
+                const color = matrix[row][col] ? darkColor : lightColor;
+                this.drawModule(ctx, offset + col * moduleSize, offset + row * moduleSize, moduleSize, moduleSize, color, shape, sizeFraction);
+            }
+        }
+    },
+
+    /**
+     * Draw the bottom QR layer respecting the delete step's deletion/hide/paint state.
+     * Used in renderWithDeletion() so the export tab shows all three layers consistently.
+     */
+    renderBottomLayerWithDeletion(ctx, matrix, offset, moduleSize, size, deleteState) {
+        const layers = this.state.layers;
+        const sizeFraction = layers.bottomSize / 100;
+        const shape = layers.bottomShape;
+        const darkColor = layers.bottomColor || '#000000';
+        const lightColor = this.state.colorMode === 'simple'
+            ? this.state.simpleLightColor
+            : (this.state.lightPalette[0] || '#ffffff');
+        const qrAreaSize = size * moduleSize;
+
+        for (let row = 0; row < size; row++) {
+            for (let col = 0; col < size; col++) {
+                if (this.isFinderPattern(row, col, size)) continue;
+                if (this.isSeparator(row, col, size)) continue;
+
+                const cx = (col + 0.5) * moduleSize;
+                const cy = (row + 0.5) * moduleSize;
+                if (this.sampleLogoAlpha(cx, cy, qrAreaSize) >= 128) continue;
+
+                const cellKey = `${row},${col}`;
+                if (deleteState.hiddenModules && deleteState.hiddenModules.has(cellKey)) continue;
+
+                if (deleteState.reverseMap) {
+                    const cwIdx = deleteState.reverseMap.get(cellKey);
+                    if (cwIdx !== undefined && deleteState.deletedCodewords.has(cwIdx)) {
+                        if (deleteState.deletedModuleEdits && deleteState.deletedModuleEdits.has(cellKey)) {
+                            const paintedDark = deleteState.deletedModuleEdits.get(cellKey);
+                            this.drawModule(ctx, offset + col * moduleSize, offset + row * moduleSize, moduleSize, moduleSize, paintedDark ? darkColor : lightColor, shape, sizeFraction);
+                        }
+                        continue;
+                    }
+                }
+
+                const color = matrix[row][col] ? darkColor : lightColor;
+                this.drawModule(ctx, offset + col * moduleSize, offset + row * moduleSize, moduleSize, moduleSize, color, shape, sizeFraction);
+            }
+        }
+    },
+
+    /**
      * Main render function
      */
     render(canvas, matrix, version) {
@@ -582,6 +896,11 @@ const QRRenderer = {
             ctx.fillStyle = this.state.lightPalette[0] || '#ffffff';
         }
         ctx.fillRect(0, 0, canvasSize, canvasSize);
+
+        // Bottom QR layer (when layer blending is enabled and logo is loaded)
+        if (this.state.logoImg && this.state.layers.enabled) {
+            this.renderBottomLayer(ctx, matrix, offset, moduleSize, size);
+        }
 
         // Draw logo background
         if (this.state.logoImg) {
@@ -617,8 +936,13 @@ const QRRenderer = {
 
                 const moduleCenterX = (col * moduleSize) + moduleSize / 2;
                 const moduleCenterY = (row * moduleSize) + moduleSize / 2;
-                const color = this.getModuleColor(moduleCenterX, moduleCenterY, isDark, qrAreaSize, moduleSize);
 
+                // With layer blending: top layer only draws modules inside the logo area
+                if (this.state.layers.enabled && this.state.logoImg) {
+                    if (this.sampleLogoAlpha(moduleCenterX, moduleCenterY, qrAreaSize) < 128) continue;
+                }
+
+                const color = this.getModuleColor(moduleCenterX, moduleCenterY, isDark, qrAreaSize, moduleSize);
                 this.drawModule(ctx, moduleX, moduleY, moduleSize, moduleSize, color, this.state.moduleShape, sizeFraction);
             }
         }
@@ -783,6 +1107,107 @@ const QRRenderer = {
     },
 
     /**
+     * Render the unified control workflow with region, target, and lock overlays.
+     */
+    renderForControl(canvas, matrix, version, controlState, analysis, logoOpacity = 0.4) {
+        if (!matrix) return;
+
+        const ctx = canvas.getContext('2d');
+        const canvasSize = canvas.width;
+        const size = matrix.length;
+        const quietZone = this.state.quietZone;
+        const totalSize = size + (quietZone * 2);
+        const moduleSize = canvasSize / totalSize;
+        const offset = quietZone * moduleSize;
+        const qrAreaSize = size * moduleSize;
+
+        ctx.clearRect(0, 0, canvasSize, canvasSize);
+        ctx.fillStyle = this.state.backgroundFill === 'dark'
+            ? (this.state.darkPalette[0] || '#000000')
+            : (this.state.lightPalette[0] || '#ffffff');
+        ctx.fillRect(0, 0, canvasSize, canvasSize);
+
+        if (this.state.logoImg) {
+            ctx.globalAlpha = logoOpacity;
+            this.drawLogoBackground(ctx, offset, offset, qrAreaSize);
+            ctx.globalAlpha = 1.0;
+        }
+        this.drawQuietZoneOverlay(ctx, canvasSize, moduleSize, quietZone);
+
+        const targets = analysis?.targets || new Map();
+        const classifications = analysis?.classifications || new Map();
+        const regionCells = analysis?.regionCells || new Set();
+        const sizeFraction = 0.85;
+        const classColors = {
+            function: 'rgba(107, 114, 128, 0.45)',
+            locked: 'rgba(239, 68, 68, 0.42)',
+            padding: 'rgba(16, 185, 129, 0.22)',
+            'ecc-solvable': 'rgba(59, 130, 246, 0.24)',
+            'ecc-locked': 'rgba(245, 158, 11, 0.42)',
+            'data-damageable': 'rgba(168, 85, 247, 0.24)',
+            'data-locked': 'rgba(107, 114, 128, 0.30)'
+        };
+
+        for (let row = 0; row < size; row++) {
+            for (let col = 0; col < size; col++) {
+                const cellKey = `${row},${col}`;
+                const moduleX = offset + col * moduleSize;
+                const moduleY = offset + row * moduleSize;
+                const target = targets.get(cellKey);
+                const isDark = target !== undefined ? target : matrix[row][col];
+                const color = isDark ? '#000000' : '#ffffff';
+
+                ctx.globalAlpha = regionCells.has(cellKey) ? 0.9 : 0.5;
+                this.drawModule(ctx, moduleX, moduleY, moduleSize, moduleSize, color, 'square', sizeFraction);
+                ctx.globalAlpha = 1.0;
+
+                const cls = classifications.get(cellKey);
+                if (cls && regionCells.has(cellKey)) {
+                    const shrunk = moduleSize * sizeFraction;
+                    const off = (moduleSize - shrunk) / 2;
+                    ctx.fillStyle = classColors[cls] || 'rgba(107, 114, 128, 0.25)';
+                    ctx.fillRect(moduleX + off, moduleY + off, shrunk, shrunk);
+                }
+
+                if (target !== undefined) {
+                    ctx.strokeStyle = target ? 'rgba(17, 24, 39, 0.9)' : 'rgba(255, 255, 255, 0.95)';
+                    ctx.lineWidth = Math.max(1, moduleSize * 0.08);
+                    ctx.strokeRect(moduleX + 2, moduleY + 2, moduleSize - 4, moduleSize - 4);
+                }
+            }
+        }
+
+        ctx.strokeStyle = 'rgba(200, 200, 200, 0.4)';
+        ctx.lineWidth = 0.5;
+        for (let i = 0; i <= size; i++) {
+            const x = offset + i * moduleSize;
+            ctx.beginPath();
+            ctx.moveTo(x, offset);
+            ctx.lineTo(x, offset + size * moduleSize);
+            ctx.stroke();
+
+            const y = offset + i * moduleSize;
+            ctx.beginPath();
+            ctx.moveTo(offset, y);
+            ctx.lineTo(offset + size * moduleSize, y);
+            ctx.stroke();
+        }
+
+        if (controlState?.regions) {
+            ctx.strokeStyle = 'rgba(79, 70, 229, 0.9)';
+            ctx.lineWidth = 2;
+            controlState.regions.forEach(region => {
+                ctx.strokeRect(
+                    offset + region.x * moduleSize,
+                    offset + region.y * moduleSize,
+                    region.width * moduleSize,
+                    region.height * moduleSize
+                );
+            });
+        }
+    },
+
+    /**
      * Draw a highlight border around a cell (for hover effect)
      */
     drawCellHighlight(canvas, row, col, size, quietZone) {
@@ -828,6 +1253,11 @@ const QRRenderer = {
             ctx.fillStyle = this.state.lightPalette[0] || '#ffffff';
         }
         ctx.fillRect(0, 0, canvasSize, canvasSize);
+
+        // Bottom QR layer (when layer blending is enabled)
+        if (this.state.logoImg && this.state.layers.enabled) {
+            this.renderBottomLayerWithDeletion(ctx, matrix, offset, moduleSize, size, deleteState);
+        }
 
         // Draw logo background
         if (this.state.logoImg) {
@@ -890,8 +1320,13 @@ const QRRenderer = {
 
                 const moduleCenterX = (col * moduleSize) + moduleSize / 2;
                 const moduleCenterY = (row * moduleSize) + moduleSize / 2;
-                const color = this.getModuleColor(moduleCenterX, moduleCenterY, isDark, qrAreaSize, moduleSize);
 
+                // With layer blending: top layer only draws modules inside the logo area
+                if (this.state.layers.enabled && this.state.logoImg) {
+                    if (this.sampleLogoAlpha(moduleCenterX, moduleCenterY, qrAreaSize) < 128) continue;
+                }
+
+                const color = this.getModuleColor(moduleCenterX, moduleCenterY, isDark, qrAreaSize, moduleSize);
                 this.drawModule(ctx, moduleX, moduleY, moduleSize, moduleSize, color, this.state.moduleShape, sizeFraction);
             }
         }

@@ -494,6 +494,18 @@ body {
     border-color: var(--error);
 }
 
+.control-button-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.control-button-grid .btn {
+    justify-content: center;
+    padding-left: 10px;
+    padding-right: 10px;
+}
+
 .logo-canvas-container canvas.paint-mode {
     cursor: crosshair;
 }
@@ -926,6 +938,90 @@ body {
     color: var(--text-muted);
     margin-top: 2px;
     text-align: right;
+}
+
+/* ========== Logo Prep Tools ========== */
+.logo-prep-group {
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+    margin-top: 4px;
+}
+
+.logo-prep-group select {
+    width: 100%;
+    padding: 8px 12px;
+    font-size: 13px;
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    cursor: pointer;
+    margin-top: 4px;
+}
+
+.logo-prep-group select:focus {
+    outline: none;
+    border-color: var(--border-focus);
+}
+
+.logo-prep-group input[type="range"] {
+    width: 100%;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--border);
+    appearance: none;
+    cursor: pointer;
+    margin-top: 4px;
+}
+
+.logo-prep-group input[type="range"]::-webkit-slider-thumb {
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--primary);
+    cursor: pointer;
+}
+
+.logo-prep-group label {
+    font-size: 13px;
+    font-weight: 500;
+    display: block;
+    margin-top: 10px;
+    margin-bottom: 2px;
+}
+
+.logo-prep-preview-wrap {
+    margin-bottom: 10px;
+    text-align: center;
+}
+
+.logo-prep-preview {
+    max-width: 100%;
+    max-height: 80px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    object-fit: contain;
+    background: repeating-conic-gradient(#d0d0d0 0% 25%, #f8f8f8 0% 50%) 0 0 / 10px 10px;
+}
+
+.logo-prep-reset-btn {
+    flex: 1;
+    justify-content: center;
+    font-size: 13px;
+    padding: 8px 12px;
+}
+
+.logo-prep-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.logo-prep-actions .btn-primary {
+    flex: 2;
+    justify-content: center;
+    font-size: 13px;
+    padding: 8px 12px;
 }
 
 /* Responsive */
