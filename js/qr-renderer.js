@@ -171,6 +171,55 @@ const QRRenderer = {
         return outside;
     },
 
+    // Squared Euclidean distance from each pixel to the nearest opaque pixel
+    // (Felzenszwalb & Huttenlocher exact distance transform, O(width*height))
+    buildDistanceSqToOpaque(opaque, width, height) {
+        const INF = 1e20;
+        const size = Math.max(width, height);
+        const f = new Float64Array(size);
+        const d = new Float64Array(size);
+        const v = new Int32Array(size);
+        const z = new Float64Array(size + 1);
+        const distSq = new Float64Array(width * height);
+
+        const transform1d = (n) => {
+            let k = 0;
+            v[0] = 0;
+            z[0] = -INF;
+            z[1] = INF;
+            for (let q = 1; q < n; q++) {
+                let s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+                while (s <= z[k]) {
+                    k--;
+                    s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+                }
+                k++;
+                v[k] = q;
+                z[k] = s;
+                z[k + 1] = INF;
+            }
+            k = 0;
+            for (let q = 0; q < n; q++) {
+                while (z[k + 1] < q) k++;
+                d[q] = (q - v[k]) * (q - v[k]) + f[v[k]];
+            }
+        };
+
+        for (let x = 0; x < width; x++) {
+            for (let y = 0; y < height; y++) f[y] = opaque[y * width + x] ? 0 : INF;
+            transform1d(height);
+            for (let y = 0; y < height; y++) distSq[y * width + x] = d[y];
+        }
+        for (let y = 0; y < height; y++) {
+            const row = y * width;
+            for (let x = 0; x < width; x++) f[x] = distSq[row + x];
+            transform1d(width);
+            for (let x = 0; x < width; x++) distSq[row + x] = d[x];
+        }
+
+        return distSq;
+    },
+
     prepareLogoImageData(sourceImageData) {
         const prep = this.state.logoPrep;
         const sourceWidth = sourceImageData.width;
@@ -238,31 +287,14 @@ const QRRenderer = {
         const output = new Uint8ClampedArray(data);
         if (outlineWidth > 0) {
             const radiusSq = outlineWidth * outlineWidth;
-            for (let y = 0; y < height; y++) {
-                for (let x = 0; x < width; x++) {
-                    const index = y * width + x;
-                    if (opaque[index]) continue;
-
-                    let nearLogo = false;
-                    outer: for (let dy = -outlineWidth; dy <= outlineWidth; dy++) {
-                        const yy = y + dy;
-                        if (yy < 0 || yy >= height) continue;
-                        for (let dx = -outlineWidth; dx <= outlineWidth; dx++) {
-                            if (dx * dx + dy * dy > radiusSq) continue;
-                            const xx = x + dx;
-                            if (xx < 0 || xx >= width) continue;
-                            if (opaque[yy * width + xx]) { nearLogo = true; break outer; }
-                        }
-                    }
-
-                    if (nearLogo) {
-                        const di = index * 4;
-                        output[di] = outlineRgb.r;
-                        output[di + 1] = outlineRgb.g;
-                        output[di + 2] = outlineRgb.b;
-                        output[di + 3] = 255;
-                    }
-                }
+            const distSq = this.buildDistanceSqToOpaque(opaque, width, height);
+            for (let index = 0; index < width * height; index++) {
+                if (opaque[index] || distSq[index] > radiusSq) continue;
+                const di = index * 4;
+                output[di] = outlineRgb.r;
+                output[di + 1] = outlineRgb.g;
+                output[di + 2] = outlineRgb.b;
+                output[di + 3] = 255;
             }
         }
 
