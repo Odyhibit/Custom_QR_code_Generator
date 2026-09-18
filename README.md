@@ -15,8 +15,8 @@ Text, URL, Contact (vCard), Phone, SMS, Email, WiFi, Calendar Event, and Locatio
 - Automatic color palette extraction from the logo
 - Mask pattern optimization to align padding modules with logo dark/light areas
 
-### Padding Painting
-- Paint individual padding modules black or white
+### Padding/Error Correction Painting
+- Paint individual padding or Error Correction modules black or white
 - Shift+drag to fill rectangular areas
 - Grid overlay distinguishes editable (padding) cells from locked (data) cells
 - Can automatically match the black/white squares to the Logo
@@ -70,7 +70,10 @@ core/
 
 ## How It Works
 
-The generator encodes content into a QR bitstream, tracks which modules correspond to padding bytes, and exposes those padding modules for visual editing. This lets you reshape the QR code's appearance without corrupting the encoded data. The codeword deletion step goes further, letting you intentionally remove or edit codewords and rely on error correction for recovery.
+The generator encodes content into a QR bitstream, tracks which modules correspond to padding and Error Correction bytes, 
+and exposes those padding modules for visual editing. There must be enough padding available for the math to work. 
+This lets you reshape the QR code's appearance without corrupting the encoded data. 
+The codeword deletion can let you go further, by intentionally removing or editing codewords and then rely on the error correction.
 
 ## License
 

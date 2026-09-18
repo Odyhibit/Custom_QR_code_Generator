@@ -21,7 +21,7 @@ const App = {
         bitstreamData: null,
         blocks: null,
         maskPattern: 0,
-        eccLevel: 'M',
+        eccLevel: 'L',
         paddingModuleMap: null,
         editableCells: new Set(),
         originalPaddingBytes: null,
@@ -510,7 +510,7 @@ const App = {
     // Get selected ECC level
     getSelectedEccLevel() {
         const select = document.getElementById('eccSelect');
-        return select ? select.value : 'M';
+        return select ? select.value : 'L';
     },
 
     // Render small preview (step 1)
@@ -570,6 +570,16 @@ const App = {
         logoInput.addEventListener('change', (e) => {
             const file = e.target.files[0];
             if (file) {
+                if (this.state.controlState.manualTargets.size > 0) {
+                    const removePainted = confirm(
+                        'This QR code has manually painted modules that may not match the new logo.\n\n' +
+                        'Remove painted modules?'
+                    );
+                    if (removePainted) {
+                        this.resetPaintedModules();
+                    }
+                }
+
                 QRRenderer.loadLogo(file, () => {
                     clearBtn.style.display = 'inline-flex';
                     logoAdjustments.style.display = 'block';
@@ -2449,11 +2459,7 @@ const App = {
 
         // Reset button
         document.getElementById('resetPaintBtn').addEventListener('click', () => {
-            this.state.paddingEdits = new Map();
-            this.state.controlState.manualTargets = new Map();
-            this.state.controlState.lastSolveSummary = null;
-            this.runControlAnalysis(true);
-            this.renderLogoCanvas();
+            this.resetPaintedModules();
         });
 
         // Canvas paint event handlers
@@ -2521,6 +2527,15 @@ const App = {
                 this.renderLogoCanvas();
             }
         });
+    },
+
+    // Clear manually painted/locked module edits (used by Reset button and logo-load prompt)
+    resetPaintedModules() {
+        this.state.paddingEdits = new Map();
+        this.state.controlState.manualTargets = new Map();
+        this.state.controlState.lastSolveSummary = null;
+        this.runControlAnalysis(true);
+        this.renderLogoCanvas();
     },
 
     // Convert mouse/touch event to grid (row, col)
