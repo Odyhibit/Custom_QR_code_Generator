@@ -14,13 +14,14 @@ Text, URL, Contact (vCard), Phone, SMS, Email, WiFi, Calendar Event, and Locatio
 
 #### Logo Embedding
 
+<img src="core/images/example_QR_code.jpg" alt="example_QR_code.jpg" width="40%" align="right">
 - Upload and visually position a logo on the QR code
 - Adjustable scale (20%-150%)
 - Automatic color palette extraction from the logo
 - Mask pattern optimization to align padding modules with logo dark/light areas
 
 #### Padding/Error Correction Painting
-<img src="core/images/example_QR_code.jpg" alt="example_QR_code.jpg" width="40%" align="right">
+
 - Paint individual padding or Error Correction modules black or white
 - Shift+drag to fill rectangular areas
 - Grid overlay distinguishes editable (padding) cells from locked (data) cells
