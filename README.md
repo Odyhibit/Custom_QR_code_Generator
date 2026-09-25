@@ -6,37 +6,43 @@ A browser-based QR code generator with deep customization options including logo
 
 **[Try it live](https://odyhibit.github.io/Custom_QR_code_Generator/)**
 
-## Features
+### **Features**
 
-### 9 Content Types
+#### 9 Content Types
+
 Text, URL, Contact (vCard), Phone, SMS, Email, WiFi, Calendar Event, and Location.
 
-### Logo Embedding
+#### Logo Embedding
+
 - Upload and visually position a logo on the QR code
 - Adjustable scale (20%-150%)
 - Automatic color palette extraction from the logo
 - Mask pattern optimization to align padding modules with logo dark/light areas
 
-### Padding/Error Correction Painting
+#### Padding/Error Correction Painting
+
 - Paint individual padding or Error Correction modules black or white
 - Shift+drag to fill rectangular areas
 - Grid overlay distinguishes editable (padding) cells from locked (data) cells
 - Can automatically match the black/white squares to the Logo
 
-### Styling
+#### Styling
+
 - **Module shapes**: Square, circle, rounded, diamond, cushion
 - **Finder shapes**: Square, rounded, circle, hybrid, hybrid-inverse with independent outer/middle/center colors
 - **Module sizing**: Adjustable from 20%-100%
 - **Color modes**: Manual colors, palette from logo, or gradient from logo with brightness controls
 - **Background fill**: Light or dark from extracted palette
 
-### Codeword Deletion
+#### Codeword Deletion
+
 - Click to delete entire codewords and see which error correction blocks they belong to
 - Color-coded block legend with deletion counts
 - Paint over deleted regions with black or white
 - Toggle deleted module visibility for a clean preview
 
-### Export & Projects
+#### Export & Projects
+
 - Export as PNG at 512px, 1024px
 - Adjustable quiet zone (0-4 modules)
 - Save/load full project state as JSON (content, logo, style, edits, deletions)
