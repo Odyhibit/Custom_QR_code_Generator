@@ -1,7 +1,7 @@
 
 # Custom QR Code Generator
 
-<img src="core/images/example_QR_code.jpg" alt="example_QR_code.jpg" width="40%" align="right">\
+<img src="core/images/example_QR_code2.jpg" alt="example_QR_code.jpg" width="40%" align="right">\
 A browser-based QR code generator with deep customization options including logo embedding, module painting, color palettes, and codeword deletion. No server required -- everything runs client-side.
 
 **[Try it live](https://odyhibit.github.io/Custom_QR_code_Generator/)**
@@ -27,7 +27,7 @@ Text, URL, Contact (vCard), Phone, SMS, Email, WiFi, Calendar Event, and Locatio
 - Can automatically match the black/white squares to the Logo
 
 #### Styling
-
+<img src="core/images/example_QR_code.jpg" alt="example_QR_code.jpg" width="40%" align="right">
 - **Module shapes**: Square, circle, rounded, diamond, cushion
 - **Finder shapes**: Square, rounded, circle, hybrid, hybrid-inverse with independent outer/middle/center colors
 - **Module sizing**: Adjustable from 20%-100%
