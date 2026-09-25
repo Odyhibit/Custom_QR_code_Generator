@@ -34,6 +34,7 @@ const QRRenderer = {
         finderCenterColor: '#000000',
         backgroundFill: 'light', // 'light', 'dark'
         finderFullSeparator: false,
+        protectFunctionPatterns: true,
         // Simple 2-color mode (no logo)
         simpleDarkColor: '#000000',
         simpleLightColor: '#ffffff',
@@ -356,6 +357,58 @@ const QRRenderer = {
             if (row === moduleCount - 8 || col === 7) return true;
         }
         return false;
+    },
+
+    /**
+     * Check whether a non-finder function module should be rendered at full size.
+     * Finder cores and separators have their own dedicated rendering path.
+     */
+    isProtectedFunctionPattern(row, col, moduleCount, version) {
+        if (!this.state.protectFunctionPatterns) return false;
+        if (this.isFinderPattern(row, col, moduleCount) || this.isSeparator(row, col, moduleCount)) {
+            return false;
+        }
+
+        return isAlignmentModule(row, col, moduleCount, version) ||
+            isFormatModule(row, col, moduleCount) ||
+            isTimingModule(row, col, moduleCount) ||
+            isDarkModule(row, col, version) ||
+            isVersionModule(row, col, moduleCount, version);
+    },
+
+    /**
+     * Draw protected function patterns last, using top-layer color rules while
+     * forcing full-size square geometry for scan reliability.
+     */
+    drawProtectedFunctionPatterns(ctx, matrix, version, offset, moduleSize, size) {
+        if (!this.state.protectFunctionPatterns) return;
+
+        const qrAreaSize = size * moduleSize;
+        for (let row = 0; row < size; row++) {
+            for (let col = 0; col < size; col++) {
+                if (!this.isProtectedFunctionPattern(row, col, size, version)) continue;
+
+                const moduleCenterX = (col + 0.5) * moduleSize;
+                const moduleCenterY = (row + 0.5) * moduleSize;
+                const color = this.getModuleColor(
+                    moduleCenterX,
+                    moduleCenterY,
+                    matrix[row][col],
+                    qrAreaSize,
+                    moduleSize
+                );
+                this.drawModule(
+                    ctx,
+                    offset + col * moduleSize,
+                    offset + row * moduleSize,
+                    moduleSize,
+                    moduleSize,
+                    color,
+                    'square',
+                    1
+                );
+            }
+        }
     },
 
     /**
@@ -835,7 +888,7 @@ const QRRenderer = {
      * Skips any module whose center is inside the logo (alpha ≥ 128) — those
      * belong exclusively to the top layer.
      */
-    renderBottomLayer(ctx, matrix, offset, moduleSize, size) {
+    renderBottomLayer(ctx, matrix, version, offset, moduleSize, size) {
         const layers = this.state.layers;
         const sizeFraction = layers.bottomSize / 100;
         const shape = layers.bottomShape;
@@ -849,6 +902,7 @@ const QRRenderer = {
             for (let col = 0; col < size; col++) {
                 if (this.isFinderPattern(row, col, size)) continue;
                 if (this.isSeparator(row, col, size)) continue;
+                if (this.isProtectedFunctionPattern(row, col, size, version)) continue;
 
                 const cx = (col + 0.5) * moduleSize;
                 const cy = (row + 0.5) * moduleSize;
@@ -864,7 +918,7 @@ const QRRenderer = {
      * Draw the bottom QR layer respecting the delete step's deletion/hide/paint state.
      * Used in renderWithDeletion() so the export tab shows all three layers consistently.
      */
-    renderBottomLayerWithDeletion(ctx, matrix, offset, moduleSize, size, deleteState) {
+    renderBottomLayerWithDeletion(ctx, matrix, version, offset, moduleSize, size, deleteState) {
         const layers = this.state.layers;
         const sizeFraction = layers.bottomSize / 100;
         const shape = layers.bottomShape;
@@ -878,6 +932,7 @@ const QRRenderer = {
             for (let col = 0; col < size; col++) {
                 if (this.isFinderPattern(row, col, size)) continue;
                 if (this.isSeparator(row, col, size)) continue;
+                if (this.isProtectedFunctionPattern(row, col, size, version)) continue;
 
                 const cx = (col + 0.5) * moduleSize;
                 const cy = (row + 0.5) * moduleSize;
@@ -931,7 +986,7 @@ const QRRenderer = {
 
         // Bottom QR layer (when layer blending is enabled and logo is loaded)
         if (this.state.logoImg && this.state.layers.enabled) {
-            this.renderBottomLayer(ctx, matrix, offset, moduleSize, size);
+            this.renderBottomLayer(ctx, matrix, version, offset, moduleSize, size);
         }
 
         // Draw logo background
@@ -953,6 +1008,7 @@ const QRRenderer = {
         for (let row = 0; row < size; row++) {
             for (let col = 0; col < size; col++) {
                 if (this.isFinderPattern(row, col, size)) continue;
+                if (this.isProtectedFunctionPattern(row, col, size, version)) continue;
                 if (this.isSeparator(row, col, size)) {
                     if (!this.state.finderFullSeparator) {
                         const moduleX = offset + (col * moduleSize);
@@ -978,6 +1034,9 @@ const QRRenderer = {
                 this.drawModule(ctx, moduleX, moduleY, moduleSize, moduleSize, color, this.state.moduleShape, sizeFraction);
             }
         }
+
+        // Restore critical non-finder patterns above the logo and artistic layers.
+        this.drawProtectedFunctionPatterns(ctx, matrix, version, offset, moduleSize, size);
 
         // Draw finder backgrounds (full-sized separators) before finders
         if (this.state.finderFullSeparator) {
@@ -1288,7 +1347,7 @@ const QRRenderer = {
 
         // Bottom QR layer (when layer blending is enabled)
         if (this.state.logoImg && this.state.layers.enabled) {
-            this.renderBottomLayerWithDeletion(ctx, matrix, offset, moduleSize, size, deleteState);
+            this.renderBottomLayerWithDeletion(ctx, matrix, version, offset, moduleSize, size, deleteState);
         }
 
         // Draw logo background
@@ -1310,6 +1369,7 @@ const QRRenderer = {
         for (let row = 0; row < size; row++) {
             for (let col = 0; col < size; col++) {
                 if (this.isFinderPattern(row, col, size)) continue;
+                if (this.isProtectedFunctionPattern(row, col, size, version)) continue;
                 if (this.isSeparator(row, col, size)) {
                     if (!this.state.finderFullSeparator) {
                         const moduleX = offset + (col * moduleSize);
@@ -1362,6 +1422,9 @@ const QRRenderer = {
                 this.drawModule(ctx, moduleX, moduleY, moduleSize, moduleSize, color, this.state.moduleShape, sizeFraction);
             }
         }
+
+        // Function patterns are never hidden/deleted and remain above artwork.
+        this.drawProtectedFunctionPatterns(ctx, matrix, version, offset, moduleSize, size);
 
         // Draw finder backgrounds (full-sized separators) before finders
         if (this.state.finderFullSeparator) {

@@ -1227,6 +1227,11 @@ const App = {
             this.renderMainCanvas();
         });
 
+        document.getElementById('protectFunctionPatterns').addEventListener('change', (e) => {
+            QRRenderer.state.protectFunctionPatterns = e.target.checked;
+            this.renderMainCanvas();
+        });
+
     },
 
     // Sync palette color picker UI with current QRRenderer palette values
@@ -3610,6 +3615,7 @@ const App = {
                 backgroundFill: rs.backgroundFill,
                 quietZone: rs.quietZone,
                 finderFullSeparator: rs.finderFullSeparator,
+                protectFunctionPatterns: rs.protectFunctionPatterns,
                 simpleDarkColor: rs.simpleDarkColor,
                 simpleLightColor: rs.simpleLightColor
             },
@@ -3707,6 +3713,7 @@ const App = {
         rs.backgroundFill = style.backgroundFill || 'light';
         rs.quietZone = style.quietZone ?? 2;
         rs.finderFullSeparator = !!style.finderFullSeparator;
+        rs.protectFunctionPatterns = style.protectFunctionPatterns ?? true;
         rs.simpleDarkColor = style.simpleDarkColor || '#000000';
         rs.simpleLightColor = style.simpleLightColor || '#ffffff';
 
@@ -3747,6 +3754,7 @@ const App = {
         document.getElementById('finderMiddleColor').value = rs.finderMiddleColor;
         document.getElementById('finderCenterColor').value = rs.finderCenterColor;
         document.getElementById('finderFullSeparator').checked = rs.finderFullSeparator;
+        document.getElementById('protectFunctionPatterns').checked = rs.protectFunctionPatterns;
 
         // Simple colors (no logo mode)
         document.getElementById('simpleDarkColor').value = rs.simpleDarkColor;

@@ -429,6 +429,11 @@
                     <div class="control-group">
                         <h3>Module Size: <span id="moduleSizeValue">80</span>%</h3>
                         <input type="range" id="moduleSize" min="20" max="100" value="80">
+                        <label class="checkbox-inline" style="display: flex; align-items: center; gap: 8px; margin-top: 10px; cursor: pointer;">
+                            <input type="checkbox" id="protectFunctionPatterns" checked>
+                            <span style="font-size: 13px;">Protect functional patterns</span>
+                        </label>
+                        <p class="control-hint">Keeps timing, alignment, and format modules full-sized above artwork.</p>
                     </div>
 
                     <!-- Simple Module Colors (visible when no logo) -->
