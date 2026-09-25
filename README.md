@@ -1,5 +1,7 @@
+
 # Custom QR Code Generator
 
+<img src="core/images/example_QR_code.jpg" alt="example_QR_code.jpg" width="40%" align="right">\
 A browser-based QR code generator with deep customization options including logo embedding, module painting, color palettes, and codeword deletion. No server required -- everything runs client-side.
 
 **[Try it live](https://odyhibit.github.io/Custom_QR_code_Generator/)**
