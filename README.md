@@ -20,14 +20,14 @@ Text, URL, Contact (vCard), Phone, SMS, Email, WiFi, Calendar Event, and Locatio
 - Mask pattern optimization to align padding modules with logo dark/light areas
 
 #### Padding/Error Correction Painting
-
+<img src="core/images/example_QR_code.jpg" alt="example_QR_code.jpg" width="40%" align="right">
 - Paint individual padding or Error Correction modules black or white
 - Shift+drag to fill rectangular areas
 - Grid overlay distinguishes editable (padding) cells from locked (data) cells
 - Can automatically match the black/white squares to the Logo
 
 #### Styling
-<img src="core/images/example_QR_code.jpg" alt="example_QR_code.jpg" width="40%" align="right">
+
 - **Module shapes**: Square, circle, rounded, diamond, cushion
 - **Finder shapes**: Square, rounded, circle, hybrid, hybrid-inverse with independent outer/middle/center colors
 - **Module sizing**: Adjustable from 20%-100%
